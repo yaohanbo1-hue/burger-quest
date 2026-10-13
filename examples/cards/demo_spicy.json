@@ -91,9 +91,8 @@
       "nutrition": {}
     }
   ],
-  "warnings": [
-    "默认选择最近门店「麦当劳（深圳南山科技园店）·演示」，可在需求中指定其他门店"
-  ],
+  "store_candidates": [],
+  "warnings": [],
   "data_sources": {
     "server": {
       "server": "麦当劳中国 MCP Server (https://mcp.mcd.cn)",
@@ -102,13 +101,13 @@
         "now-time-info",
         "query-nearby-stores",
         "query-meals",
-        "query-meal-detail",
         "query-store-coupons",
         "query-my-coupons",
         "list-nutrition-foods",
         "calculate-price"
       ]
     },
+    "store": "query-nearby-stores @ 南山科技园",
     "menu": "query-meals @ DEMO-001（16 个餐品）",
     "coupons": "query-store-coupons + query-my-coupons（3 张）",
     "nutrition": "list-nutrition-foods（14 条）",

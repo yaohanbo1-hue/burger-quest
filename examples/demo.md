@@ -60,10 +60,29 @@ python -m burger_quest demo "预算5块，想吃汉堡"
 
 预期要点：**明确失败**——「没有组合能落在 ¥5.00 预算内（候选组合因估算价超出预算被跳过；未编造任何价格）」，退出码 1，不生成任何方案。
 
-## 附：查看引擎使用的 MCP 工具
+## 场景 5：多家候选门店（不默默选择）
+
+```bash
+python -m burger_quest demo "外送到演示门店，预算35"
+```
+
+预期要点：「演示门店」同时匹配两家演示门店 → 列出候选（DEMO-001 / DEMO-002）并暂停，提示用 `--store-code` 重新运行；**不查询菜单、不生成任何价格**，退出码 1。
+
+## 附 1：查看引擎使用的 MCP 工具
 
 ```bash
 python -m burger_quest tools
 ```
 
-预期输出 8 个实际调用工具（now-time-info / query-nearby-stores / query-meals / query-meal-detail / query-store-coupons / query-my-coupons / list-nutrition-foods / calculate-price）与预留工具清单（available-coupons / create-order / cancel-order / query-order）。
+预期输出 7 个实际调用工具（now-time-info / query-nearby-stores / query-meals / query-store-coupons / query-my-coupons / list-nutrition-foods / calculate-price）与预留工具清单（query-meal-detail / available-coupons / auto-bind-coupons / create-order / cancel-order / query-order）。
+
+## 附 2：查询附近门店（获取门店编码）
+
+```bash
+python -m burger_quest stores "南山科技园" --demo    # 演示模式
+python -m burger_quest stores "南山科技园"           # 真实模式（需 MCD_MCP_TOKEN）
+```
+
+预期要点：输出门店列表（名称 + 编码 + 地址），并提示用 `--store-code` 继续。
+
+> 备注：场景 2 / 3 未提供位置，演示模式会使用默认演示门店（DEMO-001）并在提示中明确声明；真实模式没有位置信息时会要求补充，不会假设门店。

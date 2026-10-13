@@ -77,10 +77,28 @@ python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园�
 # 2. Token 只通过环境变量提供（切勿写进代码或提交仓库）
 export MCD_MCP_TOKEN="你的Token"
 
-python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园" --store-code DEMO-001
+# 3. 直接按位置规划（自动用官方 query-nearby-stores 查询附近门店）
+python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"
 ```
 
-未设置 `MCD_MCP_TOKEN` 时，程序会明确报错并引导申请，而不是静默降级。
+行为约定（与演示模式彻底分离）：
+
+| 情况 | 行为 |
+| --- | --- |
+| 未配置 `MCD_MCP_TOKEN` | 明确报错（退出码 2），**不会**静默切换到演示数据 |
+| 找到多家附近门店 | 列出全部候选门店及编码并暂停，不默默选一家；选定后加 `--store-code` 重新运行 |
+| 没有位置信息 | 明确要求补充地址或门店编码（不会假设门店） |
+| 查不到门店 / 菜单失败 / 无法确定用餐方式 | 逐项说明原因并停止，不生成任何价格 |
+
+```bash
+# 先查附近门店，获取真实门店编码
+python -m burger_quest stores "南山科技园"
+
+# 指定门店运行
+python -m burger_quest quest "我想吃辣，预算35" --store-code <编码>
+```
+
+> ⚠️ `DEMO-001` / `DEMO-002` 只存在于演示数据（fixtures），真实模式使用会查询失败；真实门店编码请用 `stores` 子命令获取。
 
 ### 4.3 作为 WorkBuddy Skill 使用
 
@@ -107,7 +125,15 @@ python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园
 python -m pytest tests/ -v
 ```
 
-30 个测试覆盖：自然语言解析、组合规划、**不编造铁律**（价格缺失出局 / 价格计算失败无方案 / 预算筛除）、RPG 文案确定性、分享卡转义与必备声明、MCP 故障路径。
+80 个测试覆盖：自然语言解析、组合规划、**不编造铁律**（价格缺失出局 / 价格计算失败无方案 / 预算筛除）、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失，用假会话不访问网络）、防御式字段适配、门店解析流程（多候选不默默选择 / 无位置要求补充 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / 帮助与退出码）、RPG 文案确定性、分享卡转义与必备声明。
+
+> 说明：测试中的「真实模式」用假会话验证引擎链路，**不访问麦当劳服务器**；真实工具调用的参数联调验证见「已知限制」。
+
+## 6.5 已知限制（透明声明）
+
+- **真实 MCP 联调状态**：网络链路与 401/429 错误处理已在 2026-10-13 用官方 SDK（mcp 1.27.2）实测通过；**具体工具的请求参数名/枚举值按官方公开描述与惯例推断，尚未用有效 Token 逐一联调验证**（需要参赛者 Token）；
+- 自动化测试基于离线 Mock 数据，Mock 的 calculate-price 用演示数据重算，语义以官方 `calculate-price` 实时返回为准；
+- 演示数据（fixtures）不是实时菜单。
 
 ## 7. 架构（分层）
 
@@ -147,7 +173,7 @@ cards.py        分享卡渲染：HTML / Markdown（含项目名 + 非官方声�
 burger-quest/
 ├── README.md                 本文件
 ├── CONTEST_DECLARATION.md    参赛声明（官方文件，内容未改动）
-├── MCP_INTEGRATION.md        MCP 集成说明（工具/调用链/业务价值）
+├── MCP_INTEGRATION.md        MCP 集成说明（工具/调用链/业务价值/SDK 兼容）
 ├── skill.md                  WorkBuddy Skill 入口
 ├── workbuddy.md              WorkBuddy 开发上下文（专项奖励材料）
 ├── mcp-config.example.json   MCP 配置模板（仅占位符）
@@ -157,15 +183,15 @@ burger-quest/
 │   ├── models.py             数据模型（金额用「分」，杜绝浮点误差）
 │   ├── nlparser.py           自然语言解析
 │   ├── mcp_base.py           MCP 接口 + 防御式适配
-│   ├── mcp_http.py           真实 MCP 客户端（官方 SDK）
+│   ├── mcp_http.py           真实 MCP 客户端（同步门面 + 后台事件循环）
 │   ├── mcp_mock.py           演示 MCP 客户端
 │   ├── planner.py            套餐规划引擎
 │   ├── rpg.py                RPG 文案层
 │   ├── cards.py              分享卡渲染
-│   ├── service.py            编排层
+│   ├── service.py            编排层（门店解析/错误处理）
 │   └── cli.py                命令行入口
 ├── fixtures/demo_data.json   演示数据（明确标注非实时）
-├── tests/                    30 个测试
+├── tests/                    80 个测试
 └── examples/                 可复现演示与示例卡片
 ```
 

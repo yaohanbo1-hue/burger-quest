@@ -22,19 +22,27 @@ from .models import (
     yuan_to_cents,
 )
 
-# 引擎实际使用的麦当劳 MCP 工具（MVP 最小集）
+# 引擎实际调用的麦当劳 MCP 工具（MVP 最小集；query-meal-detail 预留未接入，见 TOOLS_RESERVED）
 TOOLS_USED = [
     "now-time-info",
     "query-nearby-stores",
     "query-meals",
-    "query-meal-detail",
     "query-store-coupons",
     "query-my-coupons",
     "list-nutrition-foods",
     "calculate-price",
 ]
-# 预留但 MVP 不主动调用的工具（写进文档说明边界）
-TOOLS_RESERVED = ["available-coupons", "create-order", "cancel-order", "query-order"]
+# 预留但 MVP 不主动调用的工具：
+# - query-meal-detail：套餐组成查询，联调验证参数后可接入（用于展示套餐内容/替换选项）；
+# - 其余为涉及真实资金/库存/账户状态的写操作，按比赛要求不接入。
+TOOLS_RESERVED = [
+    "query-meal-detail",
+    "available-coupons",
+    "auto-bind-coupons",
+    "create-order",
+    "cancel-order",
+    "query-order",
+]
 
 
 class MCPError(Exception):
@@ -73,16 +81,16 @@ def _as_list(v) -> list:
 
 
 def _extract_price_cents(raw: dict) -> Optional[int]:
-    """从餐品原始数据提取价格（分）。注意单位启发式：
-    - 键名含 cent/分 -> 视为分；
-    - 否则视为元；
-    - 金额大于 500 的整数且键名像价格时，按分处理（避免把 2550 分误判成 2550 元）。
+    """从餐品原始数据提取价格（分）。单位判定规则：
+    - 键名含 cent/fen/分 -> 视为「分」；
+    - 否则视为「元」；
+    - 金额大于 500 元的整数且是数值型 -> 推断为「分」（避免把 2550 分误判成 2550 元）。
     """
-    for key in ("price", "currentPrice", "salePrice", "priceYuan", "originalPrice"):
+    for key in ("priceCents", "priceInCents", "priceFen", "price", "currentPrice", "salePrice", "priceYuan", "originalPrice"):
         if key in raw and raw[key] not in (None, ""):
             v = raw[key]
             kl = key.lower()
-            if "cent" in kl or "分" in key:
+            if "cent" in kl or "fen" in kl or "分" in key:
                 try:
                     return int(float(v))
                 except (TypeError, ValueError):
@@ -166,6 +174,9 @@ class MCPClient(ABC):
         """calculate-price -> 权威价格计算（商品金额、配送费、优惠、应付总价）"""
 
     # -- 数据来源描述 -------------------------------------------------------
+
+    def close(self):
+        """释放客户端资源（Mock 为无操作；真实客户端关闭 MCP 会话与后台线程）。"""
 
     def source_note(self) -> dict:
         return {
@@ -305,10 +316,10 @@ def adapt_nutrition(raw: Any) -> list[NutritionItem]:
         out.append(
             NutritionItem(
                 name=str(name),
-                calories_kcal=num("energy", "energyKcal", "calories", "kcal", "热量"),
+                calories_kcal=num("energy", "energyKcal", "calories", "kcal", "热量", "能量"),
                 protein_g=num("protein", "proteinG", "蛋白质"),
                 fat_g=num("fat", "fatG", "脂肪"),
-                carb_g=num("carbohydrate", "carb", "carbohydrateG", "碳水"),
+                carb_g=num("carbohydrate", "carb", "carbohydrateG", "碳水", "碳水化合物"),
                 sodium_mg=num("sodium", "sodiumMg", "钠"),
                 calcium_mg=num("calcium", "calciumMg", "钙"),
                 raw=r,

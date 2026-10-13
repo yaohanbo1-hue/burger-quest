@@ -18,6 +18,7 @@ from .mcp_base import (
     adapt_meals,
     adapt_nutrition,
     adapt_price,
+    adapt_stores,
     adapt_time,
     build_calc_payload,
 )
@@ -60,11 +61,30 @@ class MockMCPClient(MCPClient):
         return adapt_time(self.data.get("now_time_info", {}))
 
     def nearby_stores(self, address: str):
-        # 演示：忽略地址细节，返回全部演示门店（真实工具按地址排序）
-        self._record("query-nearby-stores", {"address": address}, True)
-        from .mcp_base import adapt_stores
+        """演示用附近门店查询。
 
-        return adapt_stores(self.data.get("stores", []))
+        与真实工具的差异（仅演示，docstring 即声明）：
+        - 传入地址时，按「地址与门店地址/城市/名称共享的 2 字片段数」做相关性过滤，
+          模拟「按位置返回附近门店」；多个门店并列最高分时返回多家（用于候选选择流程）；
+          完全无关联时返回空列表（模拟查无门店）；
+        - 不传地址时返回默认演示门店（真实服务器会要求地址，service 层对真实模式已拦截）。
+        """
+        self._record("query-nearby-stores", {"address": address}, True)
+        stores = self.data.get("stores", [])
+        if address:
+            def relevance(s) -> int:
+                text = (s.get("address", "") or "") + (s.get("city", "") or "") + (s.get("storeName", "") or "")
+                return sum(1 for i in range(len(address) - 1) if address[i : i + 2] in text)
+
+            scored = [(relevance(s), s) for s in stores]
+            best = max((sc for sc, _ in scored), default=0)
+            if best <= 0:
+                return []
+            stores = [s for sc, s in scored if sc == best]
+        else:
+            default = str(self.data.get("default_store_code", ""))
+            stores = [s for s in stores if str(s.get("storeCode")) == default]
+        return adapt_stores(stores)
 
     def query_meals(self, store_code: str):
         self._record("query-meals", {"storeCode": store_code}, True)

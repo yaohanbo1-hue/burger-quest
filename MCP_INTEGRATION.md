@@ -16,16 +16,15 @@
 | 服务范围 | 中国大陆地区（不含港澳台） |
 | 官方文档 | <https://github.com/M-China/mcd-mcp-server> |
 
-## 2. 实际使用的工具（8 个）
+## 2. 实际使用的工具（7 个）
 
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。官方文档发布工具清单与描述，未公布每个工具的详细 JSON Schema，因此客户端对字段做**防御式适配**（按多个常见键名尝试，取不到留空并提示，绝不编造）。
 
 | 工具 | 用途 | 在调用链中的位置 |
 | --- | --- | --- |
 | `now-time-info` | 当前时间信息（用于时段上下文） | 第 1 步，失败不阻塞 |
-| `query-nearby-stores` | 按地址查询附近门店 | 第 2 步，确定作战据点 |
+| `query-nearby-stores` | 按地址查询附近门店 | 第 2 步，确定作战据点（多家候选时列出待选） |
 | `query-meals` | 查询当前门店可售餐品（分类/编码/标签/价格） | 第 3 步，**真实菜单的唯一来源** |
-| `query-meal-detail` | 按餐品编码查询套餐组成与可替换选项 | 预留扩展（MVP 在规划中以单品/套餐编码为单位） |
 | `query-store-coupons` | 当前门店可用优惠券列表 | 第 4 步，券池来源之一 |
 | `query-my-coupons` | 我的卡包优惠券 | 第 4 步，券池来源之二 |
 | `list-nutrition-foods` | 常见餐品营养数据（能量/蛋白质/脂肪/碳水/钠/钙） | 第 5 步，低卡/高蛋白筛选依据 |
@@ -33,7 +32,7 @@
 
 ### 预留但 MVP 不主动调用的工具
 
-`available-coupons`（领券动作）、`auto-bind-coupons`（一键领券，会改变用户账户状态）、`create-order` / `cancel-order` / `query-order`（订单操作）、`mall-*` / `query-lottery-info` / `draw-lottery`（商城与抽奖，涉及积分扣减）。这些工具具有实际影响，按比赛要求「真实下单或其他具有实际影响的操作必须等待用户明确确认」，本仓库不接入，仅在代码 `TOOLS_RESERVED` 中登记边界。
+`query-meal-detail`（套餐组成查询：接口已预留，联调验证参数后接入，用于展示套餐内容/替换选项）、`available-coupons` / `auto-bind-coupons`（领券动作，会改变用户账户状态）、`create-order` / `cancel-order` / `query-order`（订单操作）、`mall-*` / `query-lottery-info` / `draw-lottery`（商城与抽奖，涉及积分扣减）。这些工具具有实际影响，按比赛要求「真实下单或其他具有实际影响的操作必须等待用户明确确认」，本仓库不接入，仅在代码 `TOOLS_RESERVED` 中登记边界。
 
 ## 3. 调用链（一次完整任务）
 
@@ -44,8 +43,12 @@
   │
   ├─(1) now-time-info ────────────────► 时间上下文（失败 → warning，不阻塞）
   │
-  ├─(2) query-nearby-stores(address) ─► 门店列表，取最近一家（可在需求中指定门店编码）
-  │      └─ 失败 → 明确提示「未确定门店」，停止生成（不猜门店）
+  ├─(2) 门店确定：
+  │      ├─ 用户给了门店编码 → query-meals 验证并直接用（只查一次，复用为菜单）
+  │      └─ 否则 query-nearby-stores(address=位置)：
+  │           ├─ 0 家 → 明确告知，请补充地址或提供编码（不猜门店）
+  │           ├─ 1 家 → 使用
+  │           └─ 多家 → 列出全部候选，等用户用 --store-code 指定（不编造、不默默选择）
   │
   ├─(3) query-meals(storeCode) ───────► 真实可售菜单
   │      └─ 失败 → 明确提示「菜单查询失败」，停止生成（不编造餐品）
@@ -67,6 +70,26 @@
 ```
 
 **调用量控制**：候选组合上限 6 个 × 每个最多 3 次验价 ≈ 18 次 `calculate-price`，加其余工具约 25 次/任务，远低于 600 次/分钟限流。
+
+## 3.5 SDK 兼容性（2026-10-13 实测 mcp 1.27.2）
+
+| 版本差异 | 处理方式（`mcp_http.py`） |
+| --- | --- |
+| 导出名：旧版 `streamablehttp_client` / 新版 `streamable_http_client` | `_import_stream_client()` 双兼容 |
+| 请求头：旧版工厂收 `headers=` / 新版只收 `http_client=` | 按工厂签名分流；新版自建 `httpx2.AsyncClient` 带 Authorization |
+| transport yield：旧版 3 元组 / 新版 2 元组 | 只取前两个值 |
+| 新版 SDK 把 401/429 包装成 JSON-RPC 错误且不暴露状态码 | 自建 http_client 挂 event hook 记录 HTTP 状态码，还原 401/429 语义 |
+
+实测结论（假 Token，2026-10-13）：`https://mcp.mcd.cn` 网络可达；无效 Token 返回 HTTP 401，客户端输出「MCP Token 无效或已过期（401）」友好错误（退出码 2）。
+
+## 3.6 待联调项（需要有效 MCP Token）
+
+以下行为按官方公开描述与 camelCase 惯例实现，**尚未用有效 Token 逐一验证**，联调后据实固化：
+
+1. 各工具请求参数名（`storeCode` / `address` / `mealCode` / `couponIds` / `diningMode` 等）与嵌套结构；
+2. `diningMode` 枚举值（当前用 `delivery` / `takeaway` / `dine_in`）；
+3. `calculate-price` 返回字段与金额单位（元/分）——适配层有单位启发式，联调后确认；
+4. 优惠券折扣口径（`discount` 字段 0.5 与 8.5 的释义）。
 
 ## 4. 业务价值
 

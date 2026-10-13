@@ -204,6 +204,7 @@ class QuestResult:
 
     constraints: Constraints
     store: Optional[Store] = None
+    store_candidates: list = field(default_factory=list)  # 多门店候选：等待用户选择（不默默挑选）
     time_info: str = ""
     quest_name: str = ""
     story: str = ""

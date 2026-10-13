@@ -52,13 +52,15 @@ def test_budget_filtering(client, menu, coupons, nutrition):
 
 
 def test_over_budget_returns_closest_reference(client, menu, coupons, nutrition):
-    """超预算时给出最接近的真实价格方案作参考，并明确标注。"""
-    c = nlparser.parse("预算10块")
+    """超预算时给出最接近的真实价格方案作参考，并明确标注（参考分支必须真实执行）。"""
+    # ¥12：最便宜主食（双层吉士堡 ¥13）可过预筛但超过预算 -> 触发「最接近方案」分支
+    c = nlparser.parse("预算12块")
     options, warnings = build_plan(c, menu, coupons, nutrition, price_fn_factory(client))
-    # ¥10 什么都买不到（最便宜单品 ¥6 甜筒，但模板要求主食）-> 允许空结果+说明
-    if options:
-        assert all(o.within_budget is False for o in options)
-        assert any("预算内" in w for w in warnings)
+    assert options, "应给出最接近的真实价格方案作参考"
+    assert all(o.within_budget is False for o in options)
+    assert all(o.price_checked for o in options)
+    assert any("预算内" in w for w in warnings)
+    assert options[0].total_cents is not None and options[0].total_cents > 1200
 
 
 def test_coupon_applied_comes_from_real_pool(client, menu, coupons, nutrition):

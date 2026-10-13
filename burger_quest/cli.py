@@ -1,20 +1,26 @@
 """命令行入口。
 
 用法：
-  # 演示模式（离线，使用 fixtures 演示数据，无需 MCP Token）
+  # 演示模式（完全离线，使用内置演示数据，无需 MCP Token；数据非实时，仅用于体验与测试）
   python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人"
 
-  # 真实模式（需要 MCD_MCP_TOKEN 环境变量；Token 只从环境变量读取）
-  export MCD_MCP_TOKEN=xxxxx
-  python -m burger_quest quest "想吃辣，预算35" --store-code DEMO-001
+  # 真实模式（调用麦当劳中国官方 MCP；需要 MCD_MCP_TOKEN，未配置时明确报错，不会回退演示数据）
+  export MCD_MCP_TOKEN="你的Token"
+  python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"
+  # 找到多家附近门店时，按提示选择一家后用 --store-code 重新运行：
+  python -m burger_quest quest "我想吃辣，预算35" --store-code <编码>
 
-  # 查看引擎使用的 MCP 工具清单
+  # 先查询附近门店（获取真实门店编码）
+  python -m burger_quest stores "南山科技园"
+
+  # 查看引擎实际调用的 MCP 工具清单
   python -m burger_quest tools
+
+退出码：0=成功；1=未生成方案（含等待选择门店）；2=配置或连接错误（如缺少 Token）。
 """
 from __future__ import annotations
 
 import argparse
-import asyncio
 import datetime
 import json
 import sys
@@ -25,10 +31,10 @@ from .mcp_base import MCPError, TOOLS_RESERVED, TOOLS_USED
 from .service import run_quest
 
 
-def _print_result(result, card_html: Path = None, card_md: Path = None, json_out: Path = None) -> int:
+def _print_result(result, card_html: Path = None, card_md: Path = None, json_out: Path = None, mode: str = "quest") -> int:
     c = result.constraints
     print("=" * 62)
-    print(f"🍔 {result.quest_name or '任务失败'}")
+    print(f"🍔 {result.quest_name or '任务未完成'}")
     print("=" * 62)
     if result.story:
         print("\n【任务背景】\n" + result.story)
@@ -42,12 +48,22 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
         print("\n【价格结算】")
         for line in rpg.price_lines(result.chosen, c):
             print("  " + line)
+    if result.store_candidates:
+        print("\n【候选门店】找到多家附近门店，请选择一家后重新运行（未查询菜单、未生成任何价格）：")
+        for i, s in enumerate(result.store_candidates, 1):
+            addr = f"  {s.address}" if s.address else ""
+            print(f"  [{i}] {s.name or '（未命名门店）'}  编码：{s.code}{addr}")
+        print("\n选择后重新运行：")
+        print(f'  python -m burger_quest {mode} "{c.raw_text}" --store-code <编码>')
     if result.warnings:
         print("\n【提示】")
         for w in result.warnings:
             print("  ⚠️ " + w)
     if result.chosen is None:
-        print("\n❌ 未生成方案。原因见上方提示——引擎不会编造餐品、价格或优惠。")
+        if result.store_candidates:
+            print("\n⏸ 已暂停：等待你选择门店（不会替你默认选择，也不会生成任何价格）。")
+        else:
+            print("\n❌ 未生成方案。原因见上方提示——引擎不会编造餐品、价格或优惠。")
     else:
         print("\n【数据来源】")
         for k, v in result.data_sources.items():
@@ -83,33 +99,127 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
                 }
                 for o in result.options
             ],
+            "store_candidates": [
+                {"code": s.code, "name": s.name, "address": s.address} for s in result.store_candidates
+            ],
             "warnings": result.warnings,
             "data_sources": result.data_sources,
         }
+        json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"🧾 结构化结果(JSON) 已保存：{json_out}")
     return 0 if result.chosen is not None else 1
 
 
+def _cmd_stores(args) -> int:
+    """stores 子命令：只查附近门店，帮助用户获取真实门店编码。"""
+    if args.demo:
+        from .mcp_mock import MockMCPClient
+
+        try:
+            client = MockMCPClient(fixture_path=args.fixture)
+        except MCPError as e:
+            print(f"❌ {e}")
+            return 2
+        mode = "demo"
+    else:
+        from .mcp_http import HttpMCPClient
+
+        try:
+            client = HttpMCPClient()
+            client.connect()
+        except MCPError as e:
+            print(f"❌ {e}")
+            print("提示：演示模式可加 --demo 查看内置演示门店（DEMO-001 / DEMO-002）")
+            return 2
+        mode = "quest"
+    try:
+        stores = client.nearby_stores(args.address)
+    except MCPError as e:
+        print(f"❌ 门店查询失败：{e}")
+        return 2
+    finally:
+        client.close()
+    if not stores:
+        print(f"未在「{args.address}」找到附近门店。")
+        print("请补充更具体的地址（建议包含城市/商圈）；麦当劳 MCP 服务范围不含港澳台。")
+        return 1
+    print(f"在「{args.address}」找到 {len(stores)} 家门店：")
+    for i, s in enumerate(stores, 1):
+        addr = f"  {s.address}" if s.address else ""
+        print(f"  [{i}] {s.name or '（未命名门店）'}  编码：{s.code}{addr}")
+    print("\n选择一家后运行：")
+    print(f'  python -m burger_quest {mode} "你的需求" --store-code <编码>')
+    return 0
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="burger-quest", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="burger-quest",
+        description="Burger Quest · 麦门异世界 —— 基于麦当劳中国官方 MCP 的游戏化点餐规划",
+        epilog=(
+            "示例：\n"
+            '  python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园"\n'
+            '  python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"\n'
+            '  python -m burger_quest stores "南山科技园"\n'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--version", action="version", version=f"burger-quest {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    def add_common(p, with_text=True):
-        if with_text:
-            p.add_argument("text", help="用户自然语言需求，如：想吃辣，预算35，外送到南山科技园")
-        p.add_argument("--store-code", default=None, help="指定门店编码（跳过附近门店查询）")
-        p.add_argument("--fixture", default=None, help="演示数据 JSON 路径（默认 fixtures/demo_data.json）")
+    def add_plan_args(p):
+        p.add_argument("text", help="自然语言需求，如：想吃辣，预算35，外送到南山科技园")
+        p.add_argument(
+            "--store-code",
+            default=None,
+            help="指定门店编码（先用 stores 子命令查询真实编码；DEMO-001/DEMO-002 仅存在于演示数据）",
+        )
         p.add_argument("--card-html", type=Path, default=None, help="分享卡 HTML 输出路径")
         p.add_argument("--card-md", type=Path, default=None, help="分享卡 Markdown 输出路径")
         p.add_argument("--json", type=Path, default=None, help="结构化结果 JSON 输出路径")
 
-    p_demo = sub.add_parser("demo", help="演示模式：离线 Mock 数据")
-    add_common(p_demo)
-    p_quest = sub.add_parser("quest", help="真实模式：调用麦当劳 MCP（需 MCD_MCP_TOKEN）")
-    add_common(p_quest)
-    sub.add_parser("tools", help="列出引擎使用的 MCP 工具")
+    p_demo = sub.add_parser(
+        "demo",
+        help="演示模式：完全离线，使用内置演示数据（无需 Token，数据非实时）",
+        description=(
+            "演示模式：完全离线运行，使用 fixtures/demo_data.json 内置演示数据，"
+            "无需 MCP Token。餐品与价格均为演示数值，不是实时菜单；"
+            "用于快速体验与自动化测试。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_plan_args(p_demo)
+    p_demo.add_argument("--fixture", default=None, help="演示数据 JSON 路径（默认 fixtures/demo_data.json）")
+
+    p_quest = sub.add_parser(
+        "quest",
+        help="真实模式：调用麦当劳中国官方 MCP（需 MCD_MCP_TOKEN；未配置时明确报错，不会回退演示数据）",
+        description=(
+            "真实模式：调用麦当劳中国官方 MCP Server（https://mcp.mcd.cn）。\n"
+            "需要环境变量 MCD_MCP_TOKEN（到 https://open.mcd.cn/mcp 申请）；\n"
+            "未配置 Token 时明确报错（退出码 2），不会自动切换到演示数据。\n"
+            "本模式不接受 --fixture 参数；门店通过位置自动查询附近门店，\n"
+            "找到多家时列出候选，用 --store-code 指定其中一家。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_plan_args(p_quest)
+
+    p_stores = sub.add_parser(
+        "stores",
+        help="查询附近门店，获取门店编码（真实模式需 Token；--demo 用演示数据）",
+        description=(
+            "查询附近门店并输出门店编码列表，用于获取 --store-code 需要的真实编码。\n"
+            "真实模式需要 MCD_MCP_TOKEN；加 --demo 使用内置演示数据（离线）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_stores.add_argument("address", help="地址/位置，如：南山科技园")
+    p_stores.add_argument("--demo", action="store_true", help="使用演示数据（离线）")
+    p_stores.add_argument("--fixture", default=None, help="演示数据 JSON 路径（仅 --demo 有效）")
+
+    sub.add_parser("tools", help="列出引擎实际调用的 MCP 工具")
 
     args = parser.parse_args(argv)
 
@@ -117,35 +227,37 @@ def main(argv=None) -> int:
         print("引擎实际调用的麦当劳 MCP 工具：")
         for t in TOOLS_USED:
             print(f"  - {t}")
-        print("\n预留但 MVP 不主动调用（涉及真实资金/库存操作）：")
+        print("\n预留但 MVP 不主动调用（涉及真实资金/库存/账户状态，或需联调后接入）：")
         for t in TOOLS_RESERVED:
             print(f"  - {t}")
         return 0
+
+    if args.cmd == "stores":
+        return _cmd_stores(args)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if args.cmd == "demo":
         from .mcp_mock import MockMCPClient
 
-        client = MockMCPClient(fixture_path=args.fixture)
+        try:
+            client = MockMCPClient(fixture_path=args.fixture)
+        except MCPError as e:
+            print(f"❌ {e}")
+            return 2
         result = run_quest(args.text, client, store_code=args.store_code, generated_at=now)
-        return _print_result(result, args.card_html, args.card_md, args.json)
+        return _print_result(result, args.card_html, args.card_md, args.json, mode="demo")
 
     if args.cmd == "quest":
         from .mcp_http import HttpMCPClient
 
-        async def _run():
-            try:
-                async with HttpMCPClient() as client:
-                    return run_quest(args.text, client, store_code=args.store_code, generated_at=now)
-            except MCPError as e:
-                print(f"❌ MCP 连接失败：{e}")
-                return None
-
-        result = asyncio.run(_run())
-        if result is None:
+        try:
+            with HttpMCPClient() as client:
+                result = run_quest(args.text, client, store_code=args.store_code, generated_at=now)
+        except MCPError as e:
+            print(f"❌ {e}")
             return 2
-        return _print_result(result, args.card_html, args.card_md, args.json)
+        return _print_result(result, args.card_html, args.card_md, args.json, mode="quest")
 
     return 1
 

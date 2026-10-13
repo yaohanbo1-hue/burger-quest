@@ -128,6 +128,11 @@ def parse_dining_mode(text: str) -> str:
     return "takeaway"  # 默认到店自取（最保守，不假设配送费）
 
 
+def dining_mode_matched(text: str) -> bool:
+    """用户是否明确表达了用餐方式（用于决定是否追加默认口径提示）。"""
+    return any(_match_any(text, kws) for kws in DINING_KEYWORDS.values())
+
+
 def parse_location(text: str) -> Optional[str]:
     for pat in LOCATION_PATTERNS:
         m = pat.search(text)
@@ -186,6 +191,10 @@ def parse(text: str) -> Constraints:
 
     if budget is None:
         notes.append("未识别到预算，将不设预算上限（仍会标注真实总价）")
+    if not dining_mode_matched(text):
+        notes.append(
+            "未识别用餐方式，默认按「到店自取」计算（不含配送费）；如需外送请说明「外送/外卖」"
+        )
     if location is None and store_code is None and dining == "delivery":
         notes.append("外送场景但未提供地址/门店，需要用户补充或改用就近门店")
     if store_code:
