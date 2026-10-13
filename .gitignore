@@ -22,7 +22,3 @@ mcp-config.json
 Thumbs.db
 .idea/
 .vscode/
-
-# ---- 演示产物（示例卡片由 demo 重新生成）----
-examples/cards/*.html
-!examples/cards/.gitkeep

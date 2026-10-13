@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burger Quest · 麦门异世界 - 任务成就卡</title>
+<style>
+  body { margin:0; padding:24px; background:#f6f1e7; font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+  .card { max-width:680px; margin:0 auto; background:#fffdf8; border:2px solid #ffc72c; border-radius:20px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.08); }
+  .head { background:#da291c; color:#fff; padding:22px 26px; }
+  .head .brand { display:flex; align-items:center; gap:12px; font-weight:700; font-size:15px; letter-spacing:.5px; }
+  .arch { width:38px; height:38px; background:#ffc72c; color:#da291c; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:24px; }
+  .quest { margin-top:14px; font-size:22px; font-weight:800; line-height:1.35; }
+  .tag { display:inline-block; margin-top:10px; font-size:11px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.5); padding:2px 10px; border-radius:999px; letter-spacing:1px; }
+  .body { padding:22px 26px; color:#3a2c1c; }
+  h3 { margin:18px 0 8px; font-size:14px; color:#a0630f; letter-spacing:2px; }
+  h3:first-child { margin-top:0; }
+  .story { font-size:14px; line-height:1.8; background:#fff8e6; border-left:4px solid #ffc72c; padding:12px 14px; border-radius:0 10px 10px 0; }
+  .gear li { margin:6px 0; font-size:14px; }
+  .gear { padding-left:20px; }
+  .price { background:#fdf3f2; border:1px dashed #da291c; border-radius:12px; padding:12px 16px; }
+  .price .row { display:flex; justify-content:space-between; font-size:14px; padding:3px 0; }
+  .price .total { font-size:18px; font-weight:800; color:#da291c; }
+  .reasons li { font-size:13px; color:#6b5a3e; margin:4px 0; }
+  .meta { margin-top:18px; border-top:1px solid #eee2c8; padding-top:12px; font-size:12px; color:#8a7a5c; line-height:1.7; }
+  .meta b { color:#a0630f; }
+  .disclaimer { margin-top:10px; font-size:11px; color:#b04a3a; background:#fdf3f2; border-radius:8px; padding:8px 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head">
+    <div class="brand"><span class="arch">M</span><span>Burger Quest · 麦门异世界</span></div>
+    <div class="quest">无名冒险者的第一道门槛 · 出手阔绰的冒险者（到店取餐密令）</div>
+    <span class="tag">NON-OFFICIAL FAN PROJECT</span>
+  </div>
+  <div class="body">
+    <h3>任 务 背 景</h3>
+    <div class="story">饥饿感如同迟到的debuff悄然生效，你独自站在『麦当劳（深圳南山科技园店）·演示』，兜里只剩 ¥40.00。柜台后的屏幕闪烁着一行密文——那是演示菜单（Mock 数据，非实时菜单）。作为麦门异世界的见习冒险者，你需要在预算与口味的双重封印下，从这份菜单中组出属于自己的传说装备。智囊团当前运行在演示模式，价格与优惠均为演示数值。祝你好运，冒险者。</div>
+    <h3>推 荐 装 备</h3>
+    <ul class="gear"><li>⚔️ 深海波纹三明治 —— 麦香鱼（¥20.00）</li><li>⚔️ 能量副武器 —— 玉米杯（小）（¥7.00）</li><li>⚔️ 补给药水 —— 热红茶（¥8.00）</li><li>🎟️ 券灵加持 —— 满30减5（演示券）</li></ul>
+    <h3>价 格 结 算</h3>
+    <div class="price"><div class="row"><span>原价合计</span><span>¥35.00</span></div><div class="row"><span>优惠减免</span><span>-¥5.00</span></div><div class="row total"><span>应付总价</span><span>¥30.00（calculate-price 权威结果）</span></div><div class="row"><span>剩余预算</span><span>¥10.00</span></div></div>
+    <h3>智 囊 团 备 注</h3>
+    <ul class="reasons"><li>优惠券已省 ¥5.00</li><li>剩余预算 ¥10.00</li><li>整餐热量 约 475 千卡</li><li>满足低卡偏好</li></ul>
+    <div class="meta">
+      <div><b>冒险者需求：</b>预算 ¥40.00，1 人，到店自取，热量 ≤ 600 千卡</div>
+      <div><b>数据来源：</b>演示数据（MockMCPClient，非实时菜单）</div>
+      <div><b>生成时间：</b>2026-10-13 19:12:51</div>
+    </div>
+    <div class="disclaimer">⚠️ 非麦当劳官方项目，参赛作品，仅供娱乐参考；餐品信息、价格及供应状态以麦当劳官方渠道实时结果为准。</div>
+  </div>
+</div>
+</body>
+</html>
