@@ -1,0 +1,28 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- 敏感信息（永不提交）----
+.env
+*.token
+*_token.txt
+mcp-config.json
+!mcp-config.example.json
+
+# ---- 系统 / IDE ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- 演示产物（示例卡片由 demo 重新生成）----
+examples/cards/*.html
+!examples/cards/.gitkeep

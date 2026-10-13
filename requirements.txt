@@ -1,0 +1,7 @@
+# 运行依赖
+# 引擎核心（解析/规划/文案/卡片）为零依赖，仅用 Python 标准库；
+# 真实 MCP 模式依赖官方 mcp SDK（Streamable HTTP 客户端）。
+mcp>=1.2.0
+
+# 开发 / 测试
+pytest>=8.0

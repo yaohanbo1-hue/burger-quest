@@ -1,0 +1,70 @@
+{
+  "__disclaimer__": "⚠️ 演示数据（DEMO ONLY）：本文件中的餐品、价格、优惠券、营养数值均为演示用途，结构与麦当劳 MCP 返回保持兼容，但绝不是实时菜单。真实数据请以 MCD_MCP_TOKEN 连接 https://mcp.mcd.cn 获取。",
+  "default_store_code": "DEMO-001",
+  "now_time_info": {
+    "datetime": "2026-10-13 18:51:16",
+    "timePeriod": "dinner"
+  },
+  "stores": [
+    {
+      "storeCode": "DEMO-001",
+      "storeName": "麦当劳（深圳南山科技园店）·演示",
+      "address": "广东省深圳市南山区科技园南路88号",
+      "city": "深圳市",
+      "meals": [
+        { "mealCode": "1001", "mealName": "巨无霸", "category": "汉堡", "price": 25.0, "tags": ["经典", "牛肉"] },
+        { "mealCode": "1002", "mealName": "麦辣鸡腿堡", "category": "汉堡", "price": 21.0, "tags": ["辣", "鸡肉"] },
+        { "mealCode": "1003", "mealName": "板烧鸡腿堡", "category": "汉堡", "price": 22.0, "tags": ["鸡肉", "炭烤"] },
+        { "mealCode": "1004", "mealName": "双层吉士堡", "category": "汉堡", "price": 13.0, "tags": ["牛肉", "干酪"] },
+        { "mealCode": "1005", "mealName": "麦香鱼", "category": "汉堡", "price": 20.0, "tags": ["鱼肉"] },
+        { "mealCode": "2001", "mealName": "麦辣鸡腿堡套餐", "category": "套餐", "price": 32.0, "tags": ["辣", "套餐", "鸡肉"] },
+        { "mealCode": "2002", "mealName": "巨无霸套餐", "category": "套餐", "price": 36.0, "tags": ["经典", "套餐", "牛肉"] },
+        { "mealCode": "3001", "mealName": "薯条（大）", "category": "小食", "price": 12.5, "tags": ["酥脆"] },
+        { "mealCode": "3002", "mealName": "麦乐鸡（5块）", "category": "小食", "price": 11.5, "tags": ["鸡肉"] },
+        { "mealCode": "3003", "mealName": "麦辣鸡翅（2块）", "category": "小食", "price": 12.0, "tags": ["辣"] },
+        { "mealCode": "3004", "mealName": "玉米杯（小）", "category": "小食", "price": 7.0, "tags": ["清爽", "素食"] },
+        { "mealCode": "4001", "mealName": "可口可乐（大）", "category": "饮品", "price": 10.0, "tags": [] },
+        { "mealCode": "4002", "mealName": "零度可乐（大）", "category": "饮品", "price": 10.0, "tags": ["无糖"] },
+        { "mealCode": "4003", "mealName": "热红茶", "category": "饮品", "price": 8.0, "tags": ["暖饮"] },
+        { "mealCode": "5001", "mealName": "甜筒", "category": "甜品", "price": 6.0, "tags": ["甜"] },
+        { "mealCode": "5002", "mealName": "菠萝派", "category": "甜品", "price": 7.5, "tags": ["甜", "酥脆"] }
+      ],
+      "coupons": [
+        { "couponId": "C-DEMO-30-5", "couponName": "满30减5（演示券）", "threshold": 30, "value": 5 },
+        { "couponId": "C-DEMO-SPICY", "couponName": "麦辣鸡腿堡立减3元（演示券）", "threshold": 0, "value": 3, "applicableMeals": ["1002", "2001"] }
+      ]
+    },
+    {
+      "storeCode": "DEMO-002",
+      "storeName": "麦当劳（北京中关村店）·演示",
+      "address": "北京市海淀区中关村大街1号",
+      "city": "北京市",
+      "meals": [
+        { "mealCode": "1001", "mealName": "巨无霸", "category": "汉堡", "price": 25.0, "tags": ["经典", "牛肉"] },
+        { "mealCode": "1002", "mealName": "麦辣鸡腿堡", "category": "汉堡", "price": 21.0, "tags": ["辣", "鸡肉"] },
+        { "mealCode": "3001", "mealName": "薯条（大）", "category": "小食", "price": 12.5, "tags": ["酥脆"] },
+        { "mealCode": "4001", "mealName": "可口可乐（大）", "category": "饮品", "price": 10.0, "tags": [] }
+      ],
+      "coupons": []
+    }
+  ],
+  "my_coupons": [
+    { "couponId": "C-DEMO-FRIES-HALF", "couponName": "薯条半价尝鲜券（演示券）", "discount": 0.5, "threshold": 0, "applicableMeals": ["3001"] }
+  ],
+  "nutrition": [
+    { "foodName": "巨无霸", "energy": 520, "protein": 27, "fat": 28, "carbohydrate": 44, "sodium": 1050, "calcium": 300 },
+    { "foodName": "麦辣鸡腿堡", "energy": 560, "protein": 25, "fat": 27, "carbohydrate": 52, "sodium": 1100, "calcium": 120 },
+    { "foodName": "板烧鸡腿堡", "energy": 400, "protein": 24, "fat": 15, "carbohydrate": 45, "sodium": 900, "calcium": 110 },
+    { "foodName": "双层吉士堡", "energy": 450, "protein": 23, "fat": 24, "carbohydrate": 40, "sodium": 1000, "calcium": 320 },
+    { "foodName": "麦香鱼", "energy": 380, "protein": 17, "fat": 16, "carbohydrate": 44, "sodium": 700, "calcium": 90 },
+    { "foodName": "薯条（大）", "energy": 340, "protein": 4, "fat": 16, "carbohydrate": 46, "sodium": 300, "calcium": 30 },
+    { "foodName": "麦乐鸡（5块）", "energy": 230, "protein": 13, "fat": 13, "carbohydrate": 15, "sodium": 520, "calcium": 40 },
+    { "foodName": "麦辣鸡翅（2块）", "energy": 280, "protein": 16, "fat": 18, "carbohydrate": 14, "sodium": 600, "calcium": 45 },
+    { "foodName": "可口可乐（大）", "energy": 170, "protein": 0, "fat": 0, "carbohydrate": 43, "sodium": 20, "calcium": 5 },
+    { "foodName": "零度可乐（大）", "energy": 0, "protein": 0, "fat": 0, "carbohydrate": 0, "sodium": 30, "calcium": 5 },
+    { "foodName": "热红茶", "energy": 5, "protein": 0, "fat": 0, "carbohydrate": 1, "sodium": 5, "calcium": 3 },
+    { "foodName": "甜筒", "energy": 150, "protein": 4, "fat": 4, "carbohydrate": 24, "sodium": 60, "calcium": 120 },
+    { "foodName": "菠萝派", "energy": 230, "protein": 2, "fat": 10, "carbohydrate": 35, "sodium": 130, "calcium": 20 },
+    { "foodName": "玉米杯（小）", "energy": 90, "protein": 3, "fat": 1, "carbohydrate": 20, "sodium": 5, "calcium": 8 }
+  ]
+}
