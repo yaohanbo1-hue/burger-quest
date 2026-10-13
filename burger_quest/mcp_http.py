@@ -32,13 +32,16 @@ from typing import Optional
 from .mcp_base import (
     MCPClient,
     MCPError,
+    OrderScene,
     adapt_coupons,
+    adapt_meal_detail,
     adapt_meals,
     adapt_nutrition,
     adapt_price,
     adapt_stores,
     adapt_time,
     build_calc_payload,
+    check_envelope,
     parse_tool_text,
 )
 
@@ -267,6 +270,7 @@ class HttpMCPClient(MCPClient):
             raise self._map_error(tool, e) from e
 
     def _call(self, tool: str, arguments: dict):
+        """调用工具并做信封校验：success=false 的业务错误会转成 MCPError。"""
         if self._session is None:
             raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
 
@@ -275,39 +279,82 @@ class HttpMCPClient(MCPClient):
 
         result = self._submit(_invoke(), tool=tool)
         self._record(tool, arguments, True)
-        return parse_tool_text(result)
+        return check_envelope(tool, parse_tool_text(result))
 
-    # -- 工具封装 -----------------------------------------------------------
+    # -- 工具封装（参数名与 orderType/beType 组合均为 2026-10-13 联调实测） --
 
     def now_time(self) -> dict:
         return adapt_time(self._call("now-time-info", {}))
 
-    def nearby_stores(self, address: str):
-        raw = self._call("query-nearby-stores", {"address": address})
-        return adapt_stores(raw)
+    def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1):
+        # searchType=2 按位置搜索；city 与 keyword 至少一个（官方校验）
+        args = {"beType": be_type, "searchType": 2}
+        if city:
+            args["city"] = city
+        if keyword:
+            args["keyword"] = keyword
+        return adapt_stores(self._call("query-nearby-stores", args))
 
-    def query_meals(self, store_code: str):
-        raw = self._call("query-meals", {"storeCode": store_code})
-        return adapt_meals(raw)
+    def delivery_addresses(self) -> list[dict]:
+        raw = self._call("delivery-query-addresses", {})
+        if isinstance(raw, dict):
+            addresses = raw.get("addresses") or raw.get("list") or []
+        else:
+            addresses = raw if isinstance(raw, list) else []
+        return [a for a in addresses if isinstance(a, dict)]
 
-    def meal_detail(self, meal_code: str) -> dict:
-        raw = self._call("query-meal-detail", {"mealCode": meal_code})
-        return raw if isinstance(raw, dict) else {"raw": raw}
+    def delivery_stores(self, address_id: str, be_type: int = 2):
+        return adapt_stores(
+            self._call("delivery-query-stores", {"beType": be_type, "addressId": address_id})
+        )
 
-    def store_coupons(self, store_code: str):
-        raw = self._call("query-store-coupons", {"storeCode": store_code})
-        return adapt_coupons(raw, source="store")
+    def query_meals(self, scene: OrderScene):
+        return adapt_meals(
+            self._call(
+                "query-meals",
+                {
+                    "storeCode": scene.store_code,
+                    "orderType": scene.order_type,
+                    "beType": scene.be_type,
+                    **({"beCode": scene.be_code} if scene.be_code else {}),
+                },
+            )
+        )
+
+    def meal_detail(self, scene: OrderScene, code: str) -> dict:
+        return adapt_meal_detail(
+            self._call(
+                "query-meal-detail",
+                {
+                    "storeCode": scene.store_code,
+                    "orderType": scene.order_type,
+                    "beType": scene.be_type,
+                    "code": code,
+                    **({"beCode": scene.be_code} if scene.be_code else {}),
+                },
+            )
+        )
+
+    def store_coupons(self, scene: OrderScene):
+        return adapt_coupons(
+            self._call(
+                "query-store-coupons",
+                {
+                    "storeCode": scene.store_code,
+                    "orderType": scene.order_type,
+                    "beType": scene.be_type,
+                    **({"beCode": scene.be_code} if scene.be_code else {}),
+                },
+            ),
+            source="store",
+        )
 
     def my_coupons(self):
-        raw = self._call("query-my-coupons", {})
-        return adapt_coupons(raw, source="my")
+        return adapt_coupons(self._call("query-my-coupons", {}), source="my")
 
     def list_nutrition_foods(self):
-        raw = self._call("list-nutrition-foods", {})
-        return adapt_nutrition(raw)
+        return adapt_nutrition(self._call("list-nutrition-foods", {}))
 
-    def calculate_price(self, store_code: str, items: list, coupon_ids: list, dining_mode: str):
-        payload = build_calc_payload(items, coupon_ids, dining_mode)
-        payload["storeCode"] = store_code
-        raw = self._call("calculate-price", payload)
-        return adapt_price(raw)
+    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list):
+        payload = build_calc_payload(scene, items, coupon_ids)
+        return adapt_price(self._call("calculate-price", payload))

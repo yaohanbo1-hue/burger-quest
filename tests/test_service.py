@@ -1,6 +1,4 @@
 """服务编排与错误处理测试。"""
-import pytest
-
 from burger_quest.mcp_base import MCPError
 from burger_quest.mcp_mock import MockMCPClient
 from burger_quest.service import run_quest
@@ -9,14 +7,14 @@ from burger_quest.service import run_quest
 class BrokenMenuClient(MockMCPClient):
     """菜单查询直接失败的客户端。"""
 
-    def query_meals(self, store_code):
+    def query_meals(self, scene):
         raise MCPError("query-meals", "模拟 MCP 无响应", code=None)
 
 
 class BrokenPriceClient(MockMCPClient):
     """calculate-price 直接失败的客户端。"""
 
-    def calculate_price(self, store_code, items, coupon_ids, dining_mode):
+    def calculate_price(self, scene, items, coupon_ids):
         raise MCPError("calculate-price", "模拟价格服务不可用", code=429)
 
 
@@ -48,12 +46,10 @@ def test_price_failure_no_fabrication():
 
 
 def test_no_store_resolvable():
-    class NoStoreClient(MockMCPClient):
-        def nearby_stores(self, address):
-            return []
-
-    r = run_quest("想吃辣", NoStoreClient())
+    """有位置但查无门店（演示数据中不存在的地址）-> 明确停止，不猜门店。"""
+    r = run_quest("在火星基地吃，预算35", MockMCPClient())
     assert r.chosen is None
+    assert any("未在「火星基地」找到附近门店" in w for w in r.warnings)
     assert any("未确定门店" in w for w in r.warnings)
 
 

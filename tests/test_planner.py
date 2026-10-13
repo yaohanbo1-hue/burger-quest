@@ -2,15 +2,19 @@
 import pytest
 
 from burger_quest import nlparser
+from burger_quest.mcp_base import scene_for_mode
 from burger_quest.models import MenuItem, PriceQuote
 from burger_quest.planner import build_plan
 
 
-def price_fn_factory(client, store_code="DEMO-001", fail=False):
+def price_fn_factory(client, scene=None, fail=False):
+    scene = scene or scene_for_mode("takeaway", "DEMO-001")
+
     def fn(items, coupon_ids):
         if fail:
             return PriceQuote(ok=False, message="模拟 MCP 故障")
-        return client.calculate_price(store_code, items, coupon_ids, "takeaway")
+        return client.calculate_price(scene, items, coupon_ids)
+
     return fn
 
 

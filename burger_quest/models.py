@@ -67,6 +67,7 @@ class Store:
     name: str = ""
     address: str = ""
     city: str = ""
+    be_code: str = ""  # 业务编码（外送/得来速场景必传，联调实测）
     raw: dict = field(default_factory=dict, compare=False)
 
 

@@ -4,17 +4,37 @@
 - 任何 MCP 失败都不伪造数据：失败步骤记入 warnings，明确告诉用户哪一步不可用；
 - 门店无法确定（无位置/查不到/多候选未选）= 无法生成方案，不猜门店；
 - 菜单查询失败 = 无法生成方案（没有菜单就没有真实餐品）；
-- 价格计算失败 = 对应方案作废（没有权威总价就不给方案）；
+- 价格计算失败 = 无法生成方案（没有权威总价就不给方案）；
 - 没有符合预算的组合 = 如实说明，并给出最接近的真实价格方案作参考。
+
+真实数据流（2026-10-13 联调实测后的官方工具链）：
+1. 门店：到店场景 query-nearby-stores（searchType=2 + city/keyword）；
+   外送场景 delivery-query-addresses -> delivery-query-stores（拿 beCode）。
+2. 菜单骨架：query-meals 只返回「编码+分类+标签」，没有名称和价格。
+3. 名称：对短名单商品逐个 query-meal-detail。
+4. 价格：一次 calculate-price 传入全部短名单商品（各 1 件），
+   从返回的 productList 拿到每件商品的真实单价（分）——权威来源，不是估算。
+5. 组合验价：每个候选组合再走 calculate-price（含券）得到权威应付总价。
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from . import cards, nlparser, rpg
-from .mcp_base import MCPClient, MCPError
+from .mcp_base import (
+    MCPClient,
+    MCPError,
+    OrderScene,
+    extract_product_names,
+    extract_product_prices,
+    scene_for_mode,
+)
 from .mcp_mock import MockMCPClient
-from .models import Constraints, PlanOption, PriceQuote, QuestResult, Store
+from .models import Constraints, MenuItem, PlanItem, PlanOption, PriceQuote, QuestResult, Store
+from .planner import build_plan
+
+SHORTLIST_PER_CATEGORY = 3  # 每个分类最多取几个商品查详情
+SHORTLIST_MAX = 10           # 短名单上限（控制 query-meal-detail 调用次数）
 
 
 def _is_mock(client: MCPClient) -> bool:
@@ -26,74 +46,151 @@ def _demo_note(client: MCPClient) -> str:
     return "演示数据（MockMCPClient，非实时菜单）" if _is_mock(client) else "麦当劳 MCP 实时数据"
 
 
-def _resolve_store_and_menu(c: Constraints, client: MCPClient, result: QuestResult):
-    """确定门店并取回菜单。
+def _split_city(location: str) -> tuple[str, str]:
+    """把位置文本拆成 (城市, 关键词)。「深圳市南山区科技园」-> ("深圳市", "南山区科技园")。"""
+    loc = (location or "").strip()
+    if not loc:
+        return "", ""
+    if "市" in loc:
+        i = loc.find("市")
+        city = loc[: i + 1]
+        keyword = loc[i + 1 :].strip() or city
+        return city, keyword
+    return "", loc
 
-    返回 (store, menu)；无法确定时返回 (None, []) 并把原因写进 result.warnings。
-    规则：
-    1. 用户显式给出门店编码 → 直接验证并使用（只查一次菜单并复用，避免重复调用）；
-    2. 否则用官方 query-nearby-stores 按位置查询：
-       - 0 家 → 明确告知，请补充地址或提供编码；
-       - 1 家 → 使用；
-       - 多家 → 列出全部候选（result.store_candidates），不编造、不默默选择；
-    3. 真实模式下没有位置信息 → 明确要求补充；演示模式回退默认演示门店并声明。
-    """
-    # 1) 显式门店编码优先
-    if c.store_code:
-        try:
-            menu = client.query_meals(c.store_code)
-        except MCPError as e:
-            result.warnings.append(
-                f"门店编码 {c.store_code} 查询失败：{e}；请确认编码是否正确"
-                "（演示模式仅有 DEMO-001 / DEMO-002，真实编码请用 stores 子命令查询）"
-            )
-            return None, []
-        if not menu:
-            result.warnings.append(f"门店编码 {c.store_code} 未返回任何可售餐品；请确认编码是否正确")
-            return None, []
-        return Store(code=c.store_code, name="指定门店"), menu
 
-    # 2) 按位置查询附近门店（官方 MCP 能力）
-    address = c.location or ""
-    if not address and not _is_mock(client):
-        result.warnings.append(
-            "未提供位置信息：请说明地址（如「外送到南山科技园」），"
-            "或使用 --store-code 指定门店编码（可先运行 burger-quest stores \"<地址>\" 查询门店）"
-        )
-        return None, []
-    try:
-        stores = client.nearby_stores(address)
-    except MCPError as e:
-        result.warnings.append(f"附近门店查询失败：{e}；请补充更具体的地址或使用 --store-code 指定门店编码")
-        return None, []
+def _pick_store(stores: list[Store], result: QuestResult, source: str) -> Optional[Store]:
+    """从门店列表中选择：0 家明确告知；多家列出候选（不默默选择）；1 家直接使用。"""
     if not stores:
-        if address:
-            result.warnings.append(
-                f"未在「{address}」找到附近门店；请补充更具体的地址（建议包含城市/商圈），"
-                "或使用 --store-code 指定门店编码（麦当劳 MCP 服务范围不含港澳台）"
-            )
-        else:
-            result.warnings.append("未找到可用门店")
-        return None, []
+        result.warnings.append(
+            f"未在{source}找到附近门店；请补充更具体的地址（建议包含城市/商圈），"
+            "或使用 --store-code 指定门店编码（麦当劳 MCP 服务范围不含港澳台）"
+        )
+        return None
     if len(stores) > 1:
-        # 多候选：不编造门店、不默默选择——列出候选，等用户指定
         result.store_candidates = list(stores)
         result.warnings.append(f"找到 {len(stores)} 家候选门店：请选择一家，用 --store-code <编码> 重新运行")
-        return None, []
+        return None
+    return stores[0]
+
+
+def _resolve_scene(c: Constraints, client: MCPClient, result: QuestResult):
+    """确定订单场景（门店 + orderType/beType/beCode）。
+
+    返回 (scene, store, source_desc)；无法确定时 scene 为 None，
+    并把原因写进 warnings。source_desc 用于数据来源审计。
+    """
+    # A. 外送场景：必须走「配送地址 -> 可配送门店」流程拿 beCode
+    if c.dining_mode == "delivery":
+        if c.store_code:
+            result.warnings.append(
+                "外送场景需要从已保存的配送地址获取业务编码（beCode），暂不支持直接指定门店编码；已按该门店的「到店自取」场景查询"
+            )
+            c.dining_mode = "takeaway"
+        else:
+            try:
+                addresses = client.delivery_addresses()
+            except MCPError as e:
+                result.warnings.append(f"配送地址查询失败：{e}；外送需要已保存的配送地址")
+                return None, None, ""
+            if not addresses:
+                result.warnings.append(
+                    "外送（麦乐送）需要先在麦当劳官方 App/小程序保存配送地址；当前账户没有可用地址。"
+                    "请到官方渠道添加地址后重试，或改为「到店自取 / 堂食」"
+                )
+                return None, None, ""
+            addr = addresses[0]
+            if len(addresses) > 1:
+                result.warnings.append(
+                    f"默认使用第一个配送地址「{addr.get('address', addr.get('addressId', ''))}」"
+                )
+            try:
+                stores = client.delivery_stores(str(addr.get("addressId", "")), be_type=2)
+            except MCPError as e:
+                result.warnings.append(f"可配送门店查询失败：{e}")
+                return None, None, ""
+            store = _pick_store(stores, result, f"配送地址「{addr.get('address', '')}」附近")
+            if store is None:
+                return None, None, ""
+            be_code = store.be_code or str(addr.get("beCode", "") or "")
+            if not be_code:
+                result.warnings.append("可配送门店未返回业务编码（beCode），无法进行外送算价")
+                return None, None, ""
+            source = f"delivery-query-stores @ 地址 {addr.get('addressId', '')}"
+            return OrderScene(store.code, order_type=2, be_type=2, be_code=be_code), store, source
+
+    # B. 显式门店编码（到店场景）
+    if c.store_code:
+        return scene_for_mode("takeaway", c.store_code), Store(code=c.store_code, name="指定门店"), f"指定门店编码 {c.store_code}"
+
+    # C. 按位置查询附近门店（到店场景）
+    city, keyword = _split_city(c.location or "")
+    if not keyword and not city and not _is_mock(client):
+        result.warnings.append(
+            "未提供位置信息：请说明地址（如「外送到深圳市南山区科技园」），"
+            "或使用 --store-code 指定门店编码（可先运行 burger-quest stores \"<地址>\" 查询门店）"
+        )
+        return None, None, ""
+    try:
+        stores = client.nearby_stores(keyword, city=city, be_type=1)
+    except MCPError as e:
+        result.warnings.append(f"附近门店查询失败：{e}；请补充更具体的地址或使用 --store-code 指定门店编码")
+        return None, None, ""
+    if not stores and not keyword and not city:
+        result.warnings.append("未找到可用门店")
+        return None, None, ""
+    if not stores:
+        result.warnings.append(
+            f"未在「{c.location}」找到附近门店；请补充更具体的地址（建议包含城市/商圈），"
+            "或使用 --store-code 指定门店编码（麦当劳 MCP 服务范围不含港澳台）"
+        )
+        return None, None, ""
+    if len(stores) > 1:
+        result.store_candidates = list(stores)
+        result.warnings.append(f"找到 {len(stores)} 家候选门店：请选择一家，用 --store-code <编码> 重新运行")
+        return None, None, ""
     store = stores[0]
-    if not address:
+    if not keyword and not city:
         result.warnings.append(
             f"未提供位置信息，已使用默认演示门店「{store.name}」（真实模式必须提供位置或门店编码）"
         )
-    try:
-        menu = client.query_meals(store.code)
-    except MCPError as e:
-        result.warnings.append(f"菜单查询失败：{e}；无法生成方案（未编造任何餐品）")
-        return None, []
-    if not menu:
-        result.warnings.append(f"门店「{store.name}」未返回可售餐品，无法生成方案")
-        return None, []
-    return store, menu
+        return scene_for_mode(c.dining_mode, store.code), store, "默认演示门店（未提供位置）"
+    return scene_for_mode(c.dining_mode, store.code), store, f"query-nearby-stores @ {c.location}"
+
+
+def _menu_item_score(m: MenuItem, c: Constraints) -> float:
+    """短名单打分：只用 query-meals 能拿到的 分类/标签 信息（此时还没有名称和价格）。"""
+    text = m.category + " " + " ".join(m.tags)
+    s = 0.0
+    if "套餐" in text:
+        s += 3
+    if c.rich and "套餐" in text:
+        s += 2
+    taste_hits = {
+        "spicy": ["辣"], "sweet": ["甜"], "crispy": ["脆", "酥"], "burger": ["堡", "卷"],
+        "chicken": ["鸡"], "beef": ["牛"], "fish": ["鱼"], "veggie": ["素", "清爽", "沙拉"], "soup": ["汤"],
+    }
+    for taste, kws in taste_hits.items():
+        if taste in c.tastes and any(k in text for k in kws):
+            s += 3
+    if c.mood == "night" and any(k in text for k in ("暖饮", "汤", "热")):
+        s += 2
+    if c.max_calories is not None and any(k in text for k in ("零卡", "无糖", "清爽", "素")):
+        s += 1
+    return s
+
+
+def _shortlist(menu: list[MenuItem], c: Constraints) -> list[MenuItem]:
+    """从菜单骨架挑出要查详情的短名单（分类覆盖 + 偏好加权）。"""
+    by_cat: dict[str, list[MenuItem]] = {}
+    for m in menu:
+        by_cat.setdefault(m.category or "未分类", []).append(m)
+    picked: list[MenuItem] = []
+    for _cat, items in by_cat.items():
+        items.sort(key=lambda m: (-_menu_item_score(m, c), m.code))
+        picked.extend(items[:SHORTLIST_PER_CATEGORY])
+    picked.sort(key=lambda m: (-_menu_item_score(m, c), m.code))
+    return picked[:SHORTLIST_MAX]
 
 
 def run_quest(
@@ -116,19 +213,88 @@ def run_quest(
     except MCPError as e:
         result.warnings.append(f"时间信息获取失败（{e}），将按通用时段处理")
 
-    # 2. 门店 + 菜单（必须成功，否则没有真实餐品）
-    store, menu = _resolve_store_and_menu(c, client, result)
+    # 2. 订单场景（门店 + orderType/beType）
+    scene, store, store_source = _resolve_scene(c, client, result)
     result.store = store
-    if store is None:
+    if scene is None:
         if result.store_candidates:
             result.warnings.append("已暂停：等待你选择门店（未查询菜单、未生成任何价格）")
         else:
             result.warnings.append("未确定门店，无法查询真实菜单；已停止生成方案（未编造任何餐品）")
         return result
 
-    # 3. 优惠券（尽力而为）
+    # 3. 菜单骨架（只有编码/分类/标签）
+    try:
+        skeleton = client.query_meals(scene)
+    except MCPError as e:
+        result.warnings.append(
+            f"门店 {store.code} 菜单查询失败：{e}；无法生成方案（未编造任何餐品）"
+        )
+        return result
+    if not skeleton:
+        result.warnings.append("当前门店未返回可售餐品，无法生成方案")
+        return result
+
+    # 4. 短名单 + 餐品详情（拿名称）
+    shortlist = _shortlist(skeleton, c)
+    named: list[MenuItem] = []
+    detail_failures = 0
+    for m in shortlist:
+        try:
+            detail = client.meal_detail(scene, m.code)
+        except MCPError:
+            detail_failures += 1
+            continue
+        name = detail.get("name") or ""
+        if not name:
+            continue
+        named.append(
+            MenuItem(code=m.code, name=name, category=m.category, price_cents=None, tags=m.tags)
+        )
+    if detail_failures:
+        result.warnings.append(f"{detail_failures} 个餐品详情查询失败，已跳过")
+    if not named:
+        result.warnings.append("未能获取任何餐品名称，无法生成方案（未编造任何餐品）")
+        return result
+
+    # 5. 价格发现：一次算价拿全部短名单商品的真实单价（分）
+    try:
+        probe = client.calculate_price(scene, [PlanItem(m, 1) for m in named], [])
+    except MCPError as e:
+        result.warnings.append(f"价格查询失败：{e}；没有权威价格就无法生成方案（未编造任何价格）")
+        return result
+    if not probe.ok:
+        result.warnings.append(
+            f"价格查询失败：{probe.message or 'calculate-price 未返回应付总价'}；无法生成方案（未编造任何价格）"
+        )
+        return result
+    unit_prices = extract_product_prices(probe)
+    price_names = extract_product_names(probe)
+    priced: list[MenuItem] = []
+    unpriced = 0
+    for m in named:
+        cents = unit_prices.get(m.code)
+        if cents is None:
+            unpriced += 1
+            continue
+        priced.append(
+            MenuItem(
+                code=m.code,
+                name=price_names.get(m.code) or m.name,
+                category=m.category,
+                price_cents=cents,
+                tags=m.tags,
+            )
+        )
+    if unpriced:
+        result.warnings.append(f"{unpriced} 个餐品未返回真实价格，已从组合中排除（而不是估算价格）")
+    if not priced:
+        result.warnings.append("没有获取到任何真实价格，无法生成方案")
+        return result
+
+    # 6. 优惠券（尽力而为）
     coupons = []
-    for label, fn in (("门店优惠券", lambda: client.store_coupons(store.code)), ("我的卡包", client.my_coupons)):
+    for label, fn in (("门店优惠券", lambda: client.store_coupons(scene)), ("我的卡包", client.my_coupons)):
         try:
             coupons.extend(fn())
         except MCPError as e:
@@ -136,27 +302,25 @@ def run_quest(
     if not coupons:
         result.warnings.append("未获取到可用优惠券（不排除有券，只是当前查询未返回）")
 
-    # 4. 营养数据（尽力而为）
+    # 7. 营养数据（尽力而为）
     nutrition = []
     try:
         nutrition = client.list_nutrition_foods()
     except MCPError as e:
         result.warnings.append(f"营养数据查询失败：{e}；方案将不展示营养信息")
 
-    # 5. 权威价格计算函数（失败只计数，最后汇总为一条提示，避免刷屏）
+    # 8. 权威价格计算函数（失败只计数，最后汇总为一条提示，避免刷屏）
     price_failures: list[str] = []
 
     def price_fn(items, coupon_ids) -> PriceQuote:
         try:
-            return client.calculate_price(store.code, items, coupon_ids, c.dining_mode)
+            return client.calculate_price(scene, items, coupon_ids)
         except MCPError as e:
             price_failures.append(str(e))
             return PriceQuote(ok=False, message=str(e))
 
-    # 6. 规划
-    from .planner import build_plan
-
-    options, plan_warnings = build_plan(c, menu, coupons, nutrition, price_fn)
+    # 9. 规划
+    options, plan_warnings = build_plan(c, priced, coupons, nutrition, price_fn)
     result.options = options
     result.warnings.extend(plan_warnings)
     if price_failures and not options:
@@ -165,7 +329,7 @@ def run_quest(
             "无法给出权威总价（未编造任何价格）"
         )
 
-    # 7. RPG 任务书（以最优方案为推荐装备）
+    # 10. RPG 任务书（以最优方案为推荐装备）
     demo = _is_mock(client)
     if options:
         best = options[0]
@@ -175,19 +339,19 @@ def run_quest(
         result.gear_lines = rpg.gear_lines(best)
         result.gear_lines.extend(rpg.nutrition_lines(best, nutrition))
 
-    # 8. 数据来源审计
+    # 11. 数据来源审计
     result.data_sources = {
         "server": client.source_note(),
-        "store": (f"query-nearby-stores @ {c.location}" if not c.store_code else f"指定门店编码 {c.store_code}"),
-        "menu": f"query-meals @ {store.code}（{len(menu)} 个餐品）",
+        "store": store_source,
+        "menu": f"query-meals @ {store.code}（{len(skeleton)} 个编码，详情 {len(named)} 个，有价 {len(priced)} 个）",
         "coupons": f"query-store-coupons + query-my-coupons（{len(coupons)} 张）",
         "nutrition": f"list-nutrition-foods（{len(nutrition)} 条）" if nutrition else "未获取",
-        "price": "calculate-price（权威总价来源）",
+        "price": "calculate-price（价格发现 + 组合验价，金额单位：分）",
         "mode": _demo_note(client),
     }
     result.mcp_calls = list(client.calls)
 
-    # 9. 分享卡
+    # 12. 分享卡
     if result.chosen is not None:
         result.card_html = cards.render_html(
             c, result.chosen, store, result.time_info, _demo_note(client), generated_at or "（未提供）", demo=demo

@@ -34,19 +34,25 @@
 ## 5. 验证记录（可复现）
 
 ```bash
-python -m pytest tests/ -q          # 80 passed
+python -m pytest tests/ -q          # 99 passed
 python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人" \
   --card-html examples/cards/demo_spicy.html --card-md examples/cards/demo_spicy.md
 python -m burger_quest demo "两个人想吃点好的，预算100，堂食"   # 丰盛场景
 python -m burger_quest demo "减肥中，想吃低卡的，预算40，到店自取"  # 低卡场景
 python -m burger_quest demo "预算5块，想吃汉堡"                # 预算不足 -> 如实失败
-python -m burger_quest demo "外送到演示门店，预算35"            # 多家候选 -> 列出不选
+python -m burger_quest demo "在演示门店吃，到店自取，预算35"      # 多家候选 -> 列出不选
 python -m burger_quest stores "南山科技园" --demo               # 门店查询
 ```
 
-实测结果：辣味外送场景产出「麦辣鸡腿堡 + 立减券 + 配送费 = ¥27，剩余预算 ¥8」；两人丰盛场景产出「双套餐 + 双小食 + 双饮品 = ¥98，叠券后 ¥93」；低卡场景整餐约 475 千卡；预算不足场景明确失败且不编造价格；多家候选场景列出 DEMO-001/DEMO-002 并暂停。
+实测结果：辣味外送场景产出「麦辣鸡腿堡 + 立减券 + 配送费 = ¥27，剩余预算 ¥8」；两人丰盛场景产出「双套餐 = ¥68，叠券 ¥63」；低卡场景整餐约 540 千卡；预算不足场景明确失败且不编造价格；多家候选场景列出 DEMO-001/DEMO-002 并暂停。
 
-真实模式实测（2026-10-13，假 Token）：`https://mcp.mcd.cn` 网络可达；无效 Token 返回 HTTP 401，客户端输出「MCP Token 无效或已过期（401）」友好错误（退出码 2）；未配置 Token 时明确报错且不回落演示数据。SDK 版本兼容（导出名 / headers 传法 / transport 元数 / 401 状态码还原）均已按 mcp 1.27.2 实测处理。
+### 真实 MCP 联调实测（2026-10-13，官方 Token）
+
+1. **SDK 版本漂移修复**（mcp 1.27.2）：导出名 `streamable_http_client`、headers 改经 `httpx2.AsyncClient`、transport yield 2 元组、401/429 状态码被 SDK 吞掉后用 event hook 还原；
+2. **工具参数经 `list_tools` 官方 Schema + 真实调用验证**：`query-nearby-stores` 需 `beType`+`searchType=2`+`city/keyword`；`query-meals`/`query-meal-detail`/`query-store-coupons`/`calculate-price` 需 `orderType`+`beType`；外送另需 `beCode`（走配送地址链路）；餐品详情参数是 `code`；券挂在 `items[].couponId`；
+3. **关键返回结构实测**：`query-meals` **只返回编码和标签**（无名称无价格）→ 服务端重构为「短名单 → 详情补名 → 一次算价发现单价 → 组合验价」四段式；`calculate-price` **金额单位为分**；`list-nutrition-foods` 返回自定义分隔文本；
+4. **端到端实测**：多候选门店（5 家真实门店列出并暂停）；到店完整链路（112 编码 → 10 详情 → 10 价格，产出「龙焰鸡腿堡 ¥24」）；多人丰盛（¥52）；外送无地址（明确说明并停止）；
+5. **仍未验证**：优惠券字段/单位（账户无券）、外送全链路（账户无地址）、套餐换选与特制选项——已写入 MCP_INTEGRATION.md §3.6 与 README「已知限制」。
 
 ## 5.5 修复记录（第一阶段审计后，2026-10-13）
 
@@ -56,13 +62,14 @@ python -m burger_quest stores "南山科技园" --demo               # 门店查
 2. **门店解析重写**：显式编码优先（单次查询复用菜单）→ 位置查询附近门店 → 多候选全部列出等用户指定（不编造、不默默选择）→ 无位置明确要求补充（真实模式）；
 3. **CLI 重构**：`quest` 移除 `--fixture`（彻底区分 demo/真实）；新增 `stores` 子命令；候选门店打印与重跑指引；`--fixture` 缺失友好报错；帮助文本重写；
 4. **SDK 联调修复**（实测 mcp 1.27.2）：双版本导出名兼容、headers 经 `httpx2.AsyncClient` 传递、transport 2/3 元组兼容、event hook 还原被 SDK 吞掉的 401/429 状态码；
-5. **文档去魅**：README/MCP_INTEGRATION/skill.md/demo.md 移除 DEMO-001 真实模式误导；`query-meal-detail` 从「实际使用」移至「预留」；新增「已知限制」节；
-6. **测试扩充**：30 → 80 个（新增真实客户端同步门面、适配器、门店流程、CLI 全流程；修复一个空断言测试）。
+5. **联调后架构重构**：因官方 `query-meals` 只返回编码，服务端增加「短名单 → `query-meal-detail` 补名 → 一次 `calculate-price` 价格发现（分）→ 组合验价」链路；新增外送场景（配送地址 → 可配送门店拿 beCode；无地址明确说明）；Mock 与 fixtures 全面对齐真实返回格式；
+6. **文档去魅**：README/MCP_INTEGRATION/skill.md/demo.md 移除 DEMO-001 真实模式误导；`query-meal-detail` 转为「已接入」；MCP_INTEGRATION.md 增加 §3.5 联调实测记录与 §3.6 仍未验证项；README 增加「已知限制」；
+7. **测试扩充**：30 → 99 个（真实客户端同步门面与错误映射、联调格式适配器、门店与外送流程、CLI 全流程；修复一个空断言测试）。
 
 ## 6. 交付物清单
 
 - 引擎源码 `burger_quest/`（models / nlparser / mcp_base / mcp_http / mcp_mock / planner / rpg / cards / service / cli，共 11 个模块）
-- 测试 `tests/`（80 个用例：解析、规划铁律、真实客户端同步门面与错误映射、适配器、门店流程、CLI 全流程、卡片安全、故障路径）
+- 测试 `tests/`（99 个用例：解析、规划铁律、真实客户端同步门面与错误映射、联调格式适配器、门店与外送流程、CLI 全流程、卡片安全、故障路径）
 - 文档：README.md、MCP_INTEGRATION.md、skill.md、examples/demo.md
 - 比赛必交：CONTEST_DECLARATION.md（官方原文）、mcp-config.example.json（仅占位符）、workbuddy.md（本文件）
 - 示例：examples/cards/ 三张演示成就卡（HTML/Markdown/JSON）

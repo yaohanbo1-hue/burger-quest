@@ -1,11 +1,15 @@
 """RPG 文案层测试。"""
 from burger_quest import nlparser, rpg
+from burger_quest.mcp_base import scene_for_mode
 from burger_quest.planner import build_plan
 
 
 def _best_option(client, text, menu, coupons, nutrition):
     c = nlparser.parse(text)
-    options, _ = build_plan(c, menu, coupons, nutrition, lambda items, cids: client.calculate_price("DEMO-001", items, cids, c.dining_mode))
+    scene = scene_for_mode("takeaway", "DEMO-001")
+    options, _ = build_plan(
+        c, menu, coupons, nutrition, lambda items, cids: client.calculate_price(scene, items, cids)
+    )
     assert options
     return c, options[0]
 

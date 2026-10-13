@@ -11,7 +11,7 @@
       "title": "省钱精算阵型·已叠券",
       "items": [
         {
-          "code": "1002",
+          "code": "D1002",
           "name": "麦辣鸡腿堡",
           "qty": 1
         }
@@ -34,41 +34,10 @@
       "nutrition": {}
     },
     {
-      "title": "省钱精算阵型·已叠券",
-      "items": [
-        {
-          "code": "1002",
-          "name": "麦辣鸡腿堡",
-          "qty": 1
-        },
-        {
-          "code": "4003",
-          "name": "热红茶",
-          "qty": 1
-        }
-      ],
-      "coupons": [
-        "C-DEMO-SPICY"
-      ],
-      "total_cents": 3500,
-      "original_cents": 2900,
-      "discount_cents": 300,
-      "delivery_fee_cents": 900,
-      "within_budget": true,
-      "remaining_cents": 0,
-      "reasons": [
-        "口味命中：麦辣鸡腿堡",
-        "优惠券已省 ¥3.00",
-        "剩余预算 ¥0.00",
-        "整餐热量 约 565 千卡"
-      ],
-      "nutrition": {}
-    },
-    {
       "title": "标准探索阵型·已叠券",
       "items": [
         {
-          "code": "2001",
+          "code": "D2001",
           "name": "麦辣鸡腿堡套餐",
           "qty": 1
         }
@@ -101,17 +70,18 @@
         "now-time-info",
         "query-nearby-stores",
         "query-meals",
+        "query-meal-detail",
         "query-store-coupons",
         "query-my-coupons",
         "list-nutrition-foods",
         "calculate-price"
       ]
     },
-    "store": "query-nearby-stores @ 南山科技园",
-    "menu": "query-meals @ DEMO-001（16 个餐品）",
+    "store": "delivery-query-stores @ 地址 ADDR-DEMO-1",
+    "menu": "query-meals @ DEMO-001（16 个编码，详情 10 个，有价 10 个）",
     "coupons": "query-store-coupons + query-my-coupons（3 张）",
     "nutrition": "list-nutrition-foods（14 条）",
-    "price": "calculate-price（权威总价来源）",
+    "price": "calculate-price（价格发现 + 组合验价，金额单位：分）",
     "mode": "演示数据（MockMCPClient，非实时菜单）"
   }
 }

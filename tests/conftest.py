@@ -1,5 +1,6 @@
 import pytest
 
+from burger_quest.mcp_base import scene_for_mode
 from burger_quest.mcp_mock import MockMCPClient
 
 
@@ -9,13 +10,19 @@ def client():
 
 
 @pytest.fixture()
-def menu(client):
-    return client.query_meals("DEMO-001")
+def scene():
+    return scene_for_mode("takeaway", "DEMO-001")
 
 
 @pytest.fixture()
-def coupons(client):
-    return client.store_coupons("DEMO-001") + client.my_coupons()
+def menu(client, scene):
+    """带名称与价格的菜单（等价于服务端「骨架+详情+价格发现」的结果）。"""
+    return client.enriched_menu(scene)
+
+
+@pytest.fixture()
+def coupons(client, scene):
+    return client.store_coupons(scene) + client.my_coupons()
 
 
 @pytest.fixture()

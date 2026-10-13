@@ -2,15 +2,44 @@
 
 - MCPClient：引擎唯一依赖的接口。真实实现走官方 mcp Python SDK（mcp_http.py），
   演示/测试走 fixtures（mcp_mock.py）。
-- 适配器（_adapt_*）：麦当劳 MCP 官方文档只发布工具清单与描述，未公布每个工具的
-  详细 JSON Schema，因此这里对所有字段做「防御式提取」——按多个常见键名尝试、
-  取不到就留空并在 warnings 里说明，绝不编造。
+- 适配器（adapt_*）：把 MCP 真实返回规范化为引擎模型。
 - 数据来源审计：每次调用记录到 MCPClient.calls，最终写入任务书的数据来源区块。
+
+═══════════════════════════════════════════════════════════════
+真实返回格式（2026-10-13 用官方 Token 联调实测，mcp 1.27.2）
+═══════════════════════════════════════════════════════════════
+1. 工具返回的是**文本**：前面是大段字段说明，JSON 在 `## Original Response` 之后，
+   且 JSON 后面可能还跟着「数据传参规则」等说明文字。
+   信封结构：{"success":true,"code":200,"message":"...","datetime":"...","traceId":"...","data":...}
+   success=false 时 message 是业务错误（如「缺少参数」「外送场景下必传 beCode」）。
+2. data 结构（按工具）：
+   - now-time-info: data={datetime,...}
+   - query-nearby-stores: data=[{storeCode,storeName,address,distance,businessStatus,...,beCode?}]
+   - query-meals: data={categories:[{name,meals:[{code,tags[]}]}]}  ← 只有编码和标签，无名称无价格
+   - query-meal-detail: data={code,name,rounds[],image,modification,supportModify}
+   - query-store-coupons: data=[优惠券]
+   - query-my-coupons: data=[优惠券]；无券时返回纯文本「暂无可用优惠券」（无 JSON）
+   - list-nutrition-foods: data=**字符串**，自定义格式：
+       [160]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,carbohydrate,sodium,calcium}:
+         猪柳麦满分,null,1288,308,16,16,24,781,213
+   - calculate-price: data={price,originalPrice,discount,productOriginalPrice,productPrice,
+       productList:[{productCode,productName,quantity,subtotal,originalSubtotal}],takeWayList[]}
+       ← **金额单位是「分」**（如 2250 = ¥22.50）
+3. 工具参数（list_tools 实测 Schema）：
+   - query-nearby-stores: 必填 beType(1到店自提/5得来速)、searchType(1收藏/2按位置)；
+     可选 city、keyword（两者至少一个）
+   - query-meals / query-meal-detail / query-store-coupons / calculate-price：
+     必填 storeCode、orderType(1到店/2外送)、beType(1到店取餐/2麦乐送/5得来速/6团餐)；
+     外送(beType=2)还必填 beCode（来自配送地址）
+   - query-meal-detail 餐品编码参数名是 code（不是 mealCode）
+   - calculate-price 商品参数是 items[].productCode；优惠券是 items[].couponId（挂在商品上）
 """
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from .models import (
@@ -22,21 +51,22 @@ from .models import (
     yuan_to_cents,
 )
 
-# 引擎实际调用的麦当劳 MCP 工具（MVP 最小集；query-meal-detail 预留未接入，见 TOOLS_RESERVED）
+# 引擎实际调用的麦当劳 MCP 工具（MVP 最小集）
 TOOLS_USED = [
     "now-time-info",
     "query-nearby-stores",
     "query-meals",
+    "query-meal-detail",
     "query-store-coupons",
     "query-my-coupons",
     "list-nutrition-foods",
     "calculate-price",
 ]
-# 预留但 MVP 不主动调用的工具：
-# - query-meal-detail：套餐组成查询，联调验证参数后可接入（用于展示套餐内容/替换选项）；
-# - 其余为涉及真实资金/库存/账户状态的写操作，按比赛要求不接入。
+# 预留但 MVP 不主动调用的工具（写进文档说明边界）
 TOOLS_RESERVED = [
-    "query-meal-detail",
+    "delivery-query-addresses",
+    "delivery-query-stores",
+    "delivery-create-address",
     "available-coupons",
     "auto-bind-coupons",
     "create-order",
@@ -46,7 +76,7 @@ TOOLS_RESERVED = [
 
 
 class MCPError(Exception):
-    """MCP 调用失败（网络/鉴权/限流/服务端错误）。消息面向用户，可解释。"""
+    """MCP 调用失败（网络/鉴权/限流/服务端/业务错误）。消息面向用户，可解释。"""
 
     def __init__(self, tool: str, message: str, code: Optional[int] = None):
         self.tool = tool
@@ -55,8 +85,66 @@ class MCPError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# 防御式字段提取
+# 订单场景（官方工具需要 orderType + beType 组合，联调实测）
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OrderScene:
+    """一次点餐场景的门店 + 订单类型组合（官方算价/菜单/详情/券工具的统一入参）。"""
+
+    store_code: str
+    order_type: int  # 1=到店（含自取+得来速），2=外送
+    be_type: int     # 1=到店取餐，2=麦乐送，5=得来速，6=企业团餐
+    be_code: str = ""  # 外送/得来速必填（来自配送地址/门店查询）
+
+
+def scene_for_mode(dining_mode: str, store_code: str = "", be_code: str = "") -> OrderScene:
+    """用餐方式 -> 官方 orderType/beType 组合（联调实测语义）。"""
+    if dining_mode == "delivery":
+        return OrderScene(store_code, order_type=2, be_type=2, be_code=be_code)
+    # 到店自取 / 堂食：官方 orderType=1 & beType=1（堂食与自取的区别在下单时的取餐方式）
+    return OrderScene(store_code, order_type=1, be_type=1)
+
+
+# ---------------------------------------------------------------------------
+# 真实返回解析：从「说明文字 + JSON + 说明文字」中提取信封
+# ---------------------------------------------------------------------------
+
+
+def extract_api_json(text: str) -> Optional[dict]:
+    """从 MCP 工具返回的文本中提取 API 信封 JSON。
+
+    实测格式：字段说明 + `## Original Response` + {"success":...} + 传参规则说明。
+    策略：从头扫描每个 `{`，尝试 raw_decode，取第一个含 success/data/code 键的对象。
+    （字段说明里的 `{productName,...}` 不是合法 JSON，会被自然跳过。）
+    """
+    if not isinstance(text, str):
+        return None
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and ("success" in obj or "data" in obj or "code" in obj):
+            return obj
+    return None
+
+
+def check_envelope(tool: str, payload: Any) -> Any:
+    """校验 API 信封：success=false 时抛出带业务原因的 MCPError；成功则返回 data。"""
+    if not isinstance(payload, dict):
+        return payload
+    if payload.get("success") is False:
+        code = payload.get("code")
+        msg = payload.get("message") or "未知业务错误"
+        raise MCPError(
+            tool,
+            f"麦当劳 MCP 业务错误（code={code}）：{msg}",
+            code=code if isinstance(code, int) else None,
+        )
+    return payload.get("data", payload)
 
 
 def _first(d: dict, *keys, default=None):
@@ -72,7 +160,6 @@ def _as_list(v) -> list:
     if isinstance(v, list):
         return v
     if isinstance(v, dict):
-        # 兼容 {"list": [...]} / {"items": [...]} 等包裹
         for k in ("list", "items", "data", "records", "result"):
             if isinstance(v.get(k), list):
                 return v[k]
@@ -80,40 +167,20 @@ def _as_list(v) -> list:
     return [v]
 
 
-def _extract_price_cents(raw: dict) -> Optional[int]:
-    """从餐品原始数据提取价格（分）。单位判定规则：
-    - 键名含 cent/fen/分 -> 视为「分」；
-    - 否则视为「元」；
-    - 金额大于 500 元的整数且是数值型 -> 推断为「分」（避免把 2550 分误判成 2550 元）。
+def _to_cents_official(v) -> Optional[int]:
+    """官方算价金额 -> 分。
+
+    联调实测：官方返回**整数分**（如 2250 = ¥22.50）。
+    防御：带小数的数值/字符串按「元」解释（防止单位变更导致 100 倍误差）。
     """
-    for key in ("priceCents", "priceInCents", "priceFen", "price", "currentPrice", "salePrice", "priceYuan", "originalPrice"):
-        if key in raw and raw[key] not in (None, ""):
-            v = raw[key]
-            kl = key.lower()
-            if "cent" in kl or "fen" in kl or "分" in key:
-                try:
-                    return int(float(v))
-                except (TypeError, ValueError):
-                    return None
-            cents = yuan_to_cents(v)
-            if cents is not None and cents > 50000 and isinstance(v, (int, float)) and float(v).is_integer():
-                # 启发式：>500 元的整数价格极可能是「分」
-                return int(v)
-            return cents
-    return None
-
-
-def _extract_tags(raw: dict) -> tuple:
-    tags = _first(raw, "tags", "labels", "tagList", default=[])
-    out = []
-    for t in _as_list(tags):
-        if isinstance(t, str):
-            out.append(t)
-        elif isinstance(t, dict):
-            name = _first(t, "name", "tagName", "label")
-            if name:
-                out.append(str(name))
-    return tuple(out)
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    looks_yuan = (isinstance(v, str) and "." in v) or (isinstance(v, float) and not f.is_integer() and abs(f) < 1000)
+    return int(round(f * 100)) if looks_yuan else int(round(f))
 
 
 # ---------------------------------------------------------------------------
@@ -137,22 +204,30 @@ class MCPClient(ABC):
 
     @abstractmethod
     def now_time(self) -> dict:
-        """now-time-info -> {'datetime': ..., 'time_period': 'breakfast/lunch/...'}"""
+        """now-time-info -> {'datetime': ..., 'time_period': ...}"""
 
     @abstractmethod
-    def nearby_stores(self, address: str) -> list[Store]:
-        """query-nearby-stores -> 附近门店列表"""
+    def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1) -> list[Store]:
+        """query-nearby-stores（searchType=2 按位置）-> 附近门店列表"""
 
     @abstractmethod
-    def query_meals(self, store_code: str) -> list[MenuItem]:
-        """query-meals -> 当前门店可售餐品（含价格则带回）"""
+    def delivery_addresses(self) -> list[dict]:
+        """delivery-query-addresses -> 用户已保存的配送地址（含 addressId）"""
 
     @abstractmethod
-    def meal_detail(self, meal_code: str) -> dict:
-        """query-meal-detail -> 套餐组成/可替换选项（原始结构透传）"""
+    def delivery_stores(self, address_id: str, be_type: int = 2) -> list[Store]:
+        """delivery-query-stores -> 某配送地址可配送的门店（含 beCode）"""
 
     @abstractmethod
-    def store_coupons(self, store_code: str) -> list[Coupon]:
+    def query_meals(self, scene: OrderScene) -> list[MenuItem]:
+        """query-meals -> 门店可售餐品「骨架」（编码/分类/标签；名称价格需详情与算价补充）"""
+
+    @abstractmethod
+    def meal_detail(self, scene: OrderScene, code: str) -> dict:
+        """query-meal-detail -> {code, name, rounds, is_combo}"""
+
+    @abstractmethod
+    def store_coupons(self, scene: OrderScene) -> list[Coupon]:
         """query-store-coupons -> 当前门店可用优惠券"""
 
     @abstractmethod
@@ -164,14 +239,8 @@ class MCPClient(ABC):
         """list-nutrition-foods -> 常见餐品营养数据"""
 
     @abstractmethod
-    def calculate_price(
-        self,
-        store_code: str,
-        items: list[dict],
-        coupon_ids: list[str],
-        dining_mode: str,
-    ) -> PriceQuote:
-        """calculate-price -> 权威价格计算（商品金额、配送费、优惠、应付总价）"""
+    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list) -> PriceQuote:
+        """calculate-price -> 权威价格计算（金额单位为分）"""
 
     # -- 数据来源描述 -------------------------------------------------------
 
@@ -198,7 +267,7 @@ def _safe_args(args: dict) -> dict:
 
 def adapt_time(raw: Any) -> dict:
     d = raw if isinstance(raw, dict) else {}
-    dt = _first(d, "datetime", "currentTime", "time", "now", default="")
+    dt = _first(d, "datetime", "currentTime", "time", "now", "formatted", default="")
     period = _first(d, "timePeriod", "period", "mealPeriod", default="")
     return {"datetime": str(dt), "time_period": str(period)}
 
@@ -217,6 +286,7 @@ def adapt_stores(raw: Any) -> list[Store]:
                 name=str(_first(r, "storeName", "name", "title", default="")),
                 address=str(_first(r, "address", "storeAddress", default="")),
                 city=str(_first(r, "city", "cityName", default="")),
+                be_code=str(_first(r, "beCode", "be_code", default="") or ""),
                 raw=r,
             )
         )
@@ -224,25 +294,59 @@ def adapt_stores(raw: Any) -> list[Store]:
 
 
 def adapt_meals(raw: Any) -> list[MenuItem]:
-    out = []
-    for r in _as_list(raw):
-        if not isinstance(r, dict):
+    """query-meals 返回 {categories:[{name, meals:[{code,tags}]}]}。
+
+    注意：官方菜单**不含名称与价格**——名称由 query-meal-detail 补充，
+    价格由 calculate-price 补充。这里只带回编码/分类/标签。
+    """
+    cats = []
+    if isinstance(raw, dict):
+        cats = raw.get("categories") or raw.get("list") or []
+    elif isinstance(raw, list):
+        cats = raw
+    out: list[MenuItem] = []
+    seen = set()
+    for cat in cats:
+        if not isinstance(cat, dict):
             continue
-        code = _first(r, "mealCode", "code", "productCode", "id", "sku")
-        name = _first(r, "mealName", "name", "title", "productName")
-        if not code or not name:
-            continue
-        out.append(
-            MenuItem(
-                code=str(code),
-                name=str(name),
-                category=str(_first(r, "category", "categoryName", "type", default="")),
-                price_cents=_extract_price_cents(r),
-                tags=_extract_tags(r),
-                raw=r,
+        cat_name = str(cat.get("name", "") or "")
+        for meal in _as_list(cat.get("meals") or cat.get("items")):
+            if not isinstance(meal, dict):
+                continue
+            code = _first(meal, "code", "mealCode", "productCode")
+            if not code:
+                continue
+            code = str(code)
+            if code in seen:
+                continue
+            seen.add(code)
+            out.append(
+                MenuItem(
+                    code=code,
+                    name="",  # 名称待 query-meal-detail 补充
+                    category=cat_name,
+                    price_cents=None,  # 价格待 calculate-price 补充
+                    tags=_extract_tags(meal),
+                    raw=meal,
+                )
             )
-        )
     return out
+
+
+def adapt_meal_detail(raw: Any) -> dict:
+    """query-meal-detail -> {code, name, rounds, is_combo}。"""
+    d = raw if isinstance(raw, dict) else {}
+    data = d.get("data") if isinstance(d.get("data"), dict) else d
+    code = str(_first(data, "code", "mealCode", default="") or "")
+    name = str(_first(data, "name", "mealName", default="") or "")
+    rounds = data.get("rounds") or []
+    return {
+        "code": code,
+        "name": name,
+        "rounds": rounds if isinstance(rounds, list) else [],
+        "is_combo": bool(rounds),
+        "raw": data,
+    }
 
 
 def adapt_coupons(raw: Any, source: str) -> list[Coupon]:
@@ -258,7 +362,6 @@ def adapt_coupons(raw: Any, source: str) -> list[Coupon]:
         value_cents = None
         threshold_cents = None
         percent = None
-        # 满减：value/threshold 常见键名
         val = _first(r, "value", "amount", "discountAmount", "subtract")
         thr = _first(r, "threshold", "limitAmount", "useThreshold", "conditionAmount")
         pct = _first(r, "discount", "percent", "rate")
@@ -270,10 +373,12 @@ def adapt_coupons(raw: Any, source: str) -> list[Coupon]:
             except (TypeError, ValueError):
                 percent = None
         if val not in (None, ""):
+            # 优惠券金额单位按「元」解析（官方未在文档中明确；联调时账号无券可验证，
+            # 已在 MCP_INTEGRATION.md 待联调项登记）
             value_cents = yuan_to_cents(val)
         if thr not in (None, ""):
             threshold_cents = yuan_to_cents(thr)
-        applicable = _first(r, "applicableMeals", "mealCodes", "applicableCodes", default=[])
+        applicable = _first(r, "applicableMeals", "mealCodes", "applicableCodes", "productCodes", default=[])
         out.append(
             Coupon(
                 id=str(cid),
@@ -290,19 +395,56 @@ def adapt_coupons(raw: Any, source: str) -> list[Coupon]:
     return out
 
 
-def _to_int(v) -> Optional[int]:
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return None
+def _extract_tags(raw: dict) -> tuple:
+    tags = _first(raw, "tags", "labels", "tagList", default=[])
+    out = []
+    for t in _as_list(tags):
+        if isinstance(t, str):
+            out.append(t)
+        elif isinstance(t, dict):
+            name = _first(t, "name", "tagName", "label")
+            if name:
+                out.append(str(name))
+    return tuple(out)
+
+
+def parse_nutrition_text(text: str) -> list[dict]:
+    """解析 list-nutrition-foods 的自定义文本格式（联调实测）。
+
+    格式：[N]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,carbohydrate,sodium,calcium}:
+           名称,null,能量kJ,能量kcal,蛋白质,脂肪,碳水,钠,钙
+    返回 dict 列表（键为表头）。
+    """
+    if not isinstance(text, str):
+        return []
+    m = re.search(r"\[\d+\]\{([^}]*)\}", text)
+    if not m:
+        return []
+    headers = [h.strip() for h in m.group(1).split(",")]
+    rows = []
+    for line in text[m.end() :].splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ">", "-", "[")):
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != len(headers):
+            continue
+        rows.append(dict(zip(headers, parts)))
+    return rows
 
 
 def adapt_nutrition(raw: Any) -> list[NutritionItem]:
+    """data 是自定义文本（联调实测）；兼容 data 为 list/dict 的情况。"""
+    rows: list[dict] = []
+    if isinstance(raw, str):
+        rows = parse_nutrition_text(raw)
+    else:
+        for r in _as_list(raw):
+            if isinstance(r, dict):
+                rows.append(r)
     out = []
-    for r in _as_list(raw):
-        if not isinstance(r, dict):
-            continue
-        name = _first(r, "foodName", "name", "mealName", "title")
+    for r in rows:
+        name = _first(r, "productName", "foodName", "name", "mealName")
         if not name:
             continue
 
@@ -316,7 +458,7 @@ def adapt_nutrition(raw: Any) -> list[NutritionItem]:
         out.append(
             NutritionItem(
                 name=str(name),
-                calories_kcal=num("energy", "energyKcal", "calories", "kcal", "热量", "能量"),
+                calories_kcal=num("energyKcal", "energy", "calories", "kcal", "热量", "能量"),
                 protein_g=num("protein", "proteinG", "蛋白质"),
                 fat_g=num("fat", "fatG", "脂肪"),
                 carb_g=num("carbohydrate", "carb", "carbohydrateG", "碳水", "碳水化合物"),
@@ -329,57 +471,105 @@ def adapt_nutrition(raw: Any) -> list[NutritionItem]:
 
 
 def adapt_price(raw: Any) -> PriceQuote:
+    """calculate-price -> PriceQuote。金额单位：分（联调实测）。"""
     d = raw if isinstance(raw, dict) else {}
-    total = _first(d, "totalPrice", "payPrice", "total", "totalFee", "actualPrice")
-    original = _first(d, "originalPrice", "totalOriginalPrice", "goodsPrice")
-    discount = _first(d, "discountPrice", "discount", "couponDiscount")
+    if isinstance(d.get("data"), dict):
+        d = d["data"]
+    total = _first(d, "price", "totalPrice", "payPrice", "total", "totalFee", "actualPrice")
+    original = _first(d, "originalPrice", "totalOriginalPrice", "goodsPrice", "productOriginalPrice")
+    discount = _first(d, "discount", "discountPrice", "couponDiscount")
     fee = _first(d, "deliveryFee", "deliveryPrice", "shippingFee", "packageFee")
-    ok = _first(d, "success", "ok", default=True)
     msg = str(_first(d, "message", "msg", "errorMsg", default=""))
     if total in (None, ""):
         return PriceQuote(ok=False, message=msg or "calculate-price 未返回应付总价", raw=d)
-    try:
-        ok_flag = bool(ok) if isinstance(ok, bool) else str(ok).lower() in ("1", "true", "success")
-    except Exception:
-        ok_flag = True
     return PriceQuote(
-        total_cents=yuan_to_cents(total),
-        original_cents=yuan_to_cents(original),
-        discount_cents=yuan_to_cents(discount),
-        delivery_fee_cents=yuan_to_cents(fee),
-        ok=ok_flag,
+        total_cents=_to_cents_official(total),
+        original_cents=_to_cents_official(original),
+        discount_cents=_to_cents_official(discount),
+        delivery_fee_cents=_to_cents_official(fee),
+        ok=True,
         message=msg,
         raw=d,
     )
 
 
-def build_calc_payload(items: list, coupon_ids: list[str], dining_mode: str) -> dict:
-    """构造 calculate-price 入参（引擎侧统一结构，适配层只负责发送）。"""
-    return {
-        "items": [{"mealCode": pi.item.code, "quantity": pi.qty} for pi in items],
-        "couponIds": list(coupon_ids),
-        "diningMode": dining_mode,
+def extract_product_prices(quote: PriceQuote) -> dict:
+    """从 calculate-price 的 productList 提取「单品实付（分）」。
+
+    用于价格发现：一次调用传入多件商品（各 1 件），从返回的 productList
+    得到每件商品的 subtotal，即该商品的真实单价（分）——不是估算，是权威返回。
+    """
+    out: dict[str, int] = {}
+    if not quote.ok:
+        return out
+    for entry in _as_list(quote.raw.get("productList")):
+        if not isinstance(entry, dict):
+            continue
+        code = _first(entry, "productCode", "code")
+        subtotal = _first(entry, "subtotal", "price")
+        if code and subtotal not in (None, ""):
+            cents = _to_cents_official(subtotal)
+            if cents is not None:
+                out[str(code)] = cents
+    return out
+
+
+def extract_product_names(quote: PriceQuote) -> dict:
+    """从 calculate-price 的 productList 提取商品名称（联调实测自带）。"""
+    out: dict[str, str] = {}
+    if not quote.ok:
+        return out
+    for entry in _as_list(quote.raw.get("productList")):
+        if not isinstance(entry, dict):
+            continue
+        code = _first(entry, "productCode", "code")
+        name = _first(entry, "productName", "name")
+        if code and name:
+            out[str(code)] = str(name)
+    return out
+
+
+def build_calc_payload(scene: OrderScene, items: list, coupon_ids: list) -> dict:
+    """构造 calculate-price 入参（联调实测 Schema）。
+
+    items: list[PlanItem]；coupon_ids 挂在第一件商品上（官方 Schema 为 items[].couponId）。
+    """
+    payload_items = []
+    for i, pi in enumerate(items):
+        entry = {"productCode": pi.item.code, "quantity": pi.qty}
+        if coupon_ids and i == 0:
+            entry["couponId"] = coupon_ids[0]
+        payload_items.append(entry)
+    payload = {
+        "storeCode": scene.store_code,
+        "orderType": scene.order_type,
+        "beType": scene.be_type,
+        "items": payload_items,
     }
+    if scene.be_code:
+        payload["beCode"] = scene.be_code
+    return payload
 
 
 def parse_tool_text(result: Any) -> Any:
-    """把 MCP call_tool 返回的 content 解析成 Python 对象（通常是 JSON 字符串）。"""
+    """把 MCP call_tool 返回解析为 Python 对象。
+
+    联调实测：content 文本 = 字段说明 + JSON 信封 + 传参规则说明。
+    优先提取信封 JSON；提取不到则原样返回文本（由适配器/调用方处理）。
+    """
     content = getattr(result, "content", None)
     if content is None and isinstance(result, dict):
         content = result.get("content")
     if isinstance(content, str):
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return content
-    if isinstance(content, list) and content:
+        text = content
+    elif isinstance(content, list) and content:
         first = content[0]
         text = getattr(first, "text", None)
         if text is None and isinstance(first, dict):
             text = first.get("text")
-        if isinstance(text, str):
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return text
-    return content
+        if not isinstance(text, str):
+            return content
+    else:
+        return content
+    envelope = extract_api_json(text)
+    return envelope if envelope is not None else text

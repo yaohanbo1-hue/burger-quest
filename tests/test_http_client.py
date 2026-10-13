@@ -1,8 +1,9 @@
 """真实 MCP 客户端（同步门面）测试。
 
 不访问网络、不依赖 mcp SDK：用假会话（FakeSession）替换 _open_session，
-验证「同步接口 -> 后台事件循环 -> 工具调用 -> 防御式适配」整条链路，
-以及 Token 缺失、401/429、超时、SDK 缺失等错误路径。
+假会话按**真实联调实测的文本信封格式**返回（字段说明 + JSON + 传参规则），
+验证「同步接口 -> 后台事件循环 -> 信封提取 -> 防御式适配」整条链路，
+以及 Token 缺失、401/429、超时、SDK 缺失、业务错误等路径。
 """
 import asyncio
 import json
@@ -11,13 +12,28 @@ import types
 
 import pytest
 
-from burger_quest.mcp_base import MCPError
+from burger_quest.mcp_base import MCPError, OrderScene
 from burger_quest.mcp_http import HttpMCPClient
 from burger_quest.models import PlanItem
 
 
+def wrap_api_text(payload: dict) -> str:
+    """按联调实测格式包装：字段说明 + ## Original Response + JSON + 传参规则说明。"""
+    return (
+        "# API Response Information\n\n"
+        "Below is the response from an API call.\n\n"
+        "## Response Structure\n\n"
+        "> Content-Type: application/json\n\n"
+        "- **data**: 业务数据 (Type: object)\n"
+        "- **success**: 是否成功 (Type: boolean)\n\n"
+        "## Original Response\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+        + "\n\n## 数据传参规则\n\n1. 严禁省略字段。\n"
+    )
+
+
 class FakeSession:
-    """假 MCP 会话：按工具名返回预制 JSON；可指定某工具抛异常或延迟。"""
+    """假 MCP 会话：按工具名返回预制 payload（包装成真实文本格式）；可指定异常/延迟。"""
 
     def __init__(self, responses=None, errors=None, delay=0.0):
         self.responses = responses or {}
@@ -34,8 +50,8 @@ class FakeSession:
             await asyncio.sleep(self.delay)
         if name in self.errors:
             raise self.errors[name]
-        text = json.dumps(self.responses.get(name, {}), ensure_ascii=False)
-        return types.SimpleNamespace(content=[types.SimpleNamespace(text=text)])
+        payload = self.responses.get(name, {"success": True, "code": 200, "data": {}})
+        return types.SimpleNamespace(content=[types.SimpleNamespace(text=wrap_api_text(payload))])
 
 
 def make_client(responses=None, errors=None, delay=0.0, timeout=60.0):
@@ -51,16 +67,62 @@ def make_client(responses=None, errors=None, delay=0.0, timeout=60.0):
     return client, session
 
 
-MEALS_RESP = {
-    "list": [
-        {"mealCode": "SZ-001", "mealName": "麦辣鸡腿堡", "category": "汉堡", "currentPrice": 21.0, "tags": [{"name": "辣"}]},
-        {"mealCode": "SZ-002", "mealName": "薯条（大）", "category": "小食", "salePrice": "12.5"},
-        {"mealCode": "SZ-003", "mealName": "可口可乐（大）", "category": "饮品", "price": 10.0},
-        {"mealCode": "SZ-004", "mealName": "无价幽灵堡", "category": "汉堡"},
-    ]
+SCENE = OrderScene(store_code="1420762", order_type=1, be_type=1)
+
+# 联调实测格式的响应样本
+NOW_TIME_RESP = {"success": True, "code": 200, "data": {"datetime": "2026-10-13 20:34:27", "formatted": "2026-10-13 20:34:27"}}
+STORES_RESP = {
+    "success": True,
+    "code": 200,
+    "data": [
+        {
+            "storeCode": "1420762",
+            "storeName": "麦当劳深圳同方信息港餐厅",
+            "address": "科技园北区朗山路11号同方信息港E栋G层5号商铺",
+            "distance": 403,
+            "businessStatus": True,
+        }
+    ],
 }
-STORES_RESP = [{"storeCode": "SZ-1001", "storeName": "麦当劳（深圳测试路店）", "address": "深圳市南山区测试路1号"}]
-CALC_RESP = {"totalPrice": 27.0, "originalPrice": 30.0, "discountPrice": 3.0, "deliveryFee": 0}
+MEALS_RESP = {
+    "success": True,
+    "code": 200,
+    "data": {
+        "categories": [
+            {"name": "鸡肉汉堡/卷", "meals": [{"code": "1440", "tags": ["单品"]}, {"code": "9900005462", "tags": ["套餐"]}]},
+            {"name": "小食", "meals": [{"code": "4810", "tags": []}]},
+            {"name": "饮品", "meals": [{"code": "3101", "tags": []}]},
+        ]
+    },
+}
+DETAIL_RESP = {
+    "success": True,
+    "code": 200,
+    "data": {
+        "code": "1440",
+        "name": "麦辣鸡腿汉堡",
+        "rounds": [],
+        "supportModify": True,
+    },
+}
+CALC_RESP = {
+    "success": True,
+    "code": 200,
+    "data": {
+        "price": 2250,
+        "originalPrice": 2250,
+        "discount": 0,
+        "productList": [
+            {"productCode": "1440", "productName": "麦辣鸡腿汉堡", "quantity": 1, "subtotal": 2250, "originalSubtotal": 2250}
+        ],
+    },
+}
+NUTRITION_RESP = {
+    "success": True,
+    "code": 200,
+    "data": "[2]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,carbohydrate,sodium,calcium}:\n"
+    "  麦辣鸡腿汉堡,null,2345,560,25,27,52,1100,120\n  中薯条,null,1210,289,4,12,38,165,18",
+}
 
 
 def test_missing_token_raises_friendly_error(monkeypatch):
@@ -74,35 +136,49 @@ def test_missing_token_raises_friendly_error(monkeypatch):
 
 
 def test_sync_facade_end_to_end():
+    """完整链路：文本信封提取 -> data 解包 -> 适配（金额单位：分）。"""
     client, session = make_client(
         {
-            "now-time-info": {"datetime": "2026-10-13 19:00:00", "timePeriod": "dinner"},
+            "now-time-info": NOW_TIME_RESP,
             "query-nearby-stores": STORES_RESP,
             "query-meals": MEALS_RESP,
-            "query-store-coupons": {"list": [{"couponId": "C1", "couponName": "满30减3", "threshold": 30, "value": 3}]},
-            "query-my-coupons": [],
-            "list-nutrition-foods": {"list": [{"foodName": "麦辣鸡腿堡", "energy": 560, "protein": 25}]},
+            "query-meal-detail": DETAIL_RESP,
+            "query-store-coupons": {"success": True, "code": 200, "data": []},
+            "query-my-coupons": {"success": True, "code": 200, "data": []},
+            "list-nutrition-foods": NUTRITION_RESP,
             "calculate-price": CALC_RESP,
         }
     )
     with client:
-        assert client.now_time()["datetime"] == "2026-10-13 19:00:00"
-        stores = client.nearby_stores("测试路")
-        assert [s.code for s in stores] == ["SZ-1001"]
-        assert stores[0].name == "麦当劳（深圳测试路店）"
-        menu = client.query_meals("SZ-1001")
-        assert len(menu) == 4
-        assert menu[0].name == "麦辣鸡腿堡" and menu[0].price_cents == 2100
-        assert menu[0].tags == ("辣",)  # dict 形式的 tag 也兼容
-        assert menu[1].price_cents == 1250  # salePrice 字符串
-        assert menu[3].price_cents is None  # 无价格 -> None，不编造
-        coupons = client.store_coupons("SZ-1001")
-        assert coupons[0].threshold_cents == 3000 and coupons[0].value_cents == 300
+        assert client.now_time()["datetime"] == "2026-10-13 20:34:27"
+        stores = client.nearby_stores("科技园", city="深圳市")
+        assert [s.code for s in stores] == ["1420762"]
+        assert stores[0].name == "麦当劳深圳同方信息港餐厅"
+        # 门店查询参数：beType + searchType=2 + city/keyword（联调实测）
+        args = dict(session.calls[1][1])
+        assert args["beType"] == 1 and args["searchType"] == 2 and args["city"] == "深圳市"
+        # 菜单骨架：只有编码/分类/标签，无名称无价格
+        menu = client.query_meals(SCENE)
+        assert [m.code for m in menu] == ["1440", "9900005462", "4810", "3101"]
+        assert menu[0].name == "" and menu[0].price_cents is None
+        assert menu[0].category == "鸡肉汉堡/卷" and menu[0].tags == ("单品",)
+        # 餐品详情：名称来自这里
+        detail = client.meal_detail(SCENE, "1440")
+        assert detail["name"] == "麦辣鸡腿汉堡" and detail["is_combo"] is False
+        # 算价：金额单位是分（2250 = ¥22.50）
+        quote = client.calculate_price(SCENE, [PlanItem(menu[0], 1)], [])
+        assert quote.ok and quote.total_cents == 2250
+        assert quote.original_cents == 2250 and quote.discount_cents == 0
+        # 单品价格/名称提取（价格发现用）
+        from burger_quest.mcp_base import extract_product_names, extract_product_prices
+
+        assert extract_product_prices(quote) == {"1440": 2250}
+        assert extract_product_names(quote) == {"1440": "麦辣鸡腿汉堡"}
+        # 营养：自定义文本解析
         nutrition = client.list_nutrition_foods()
+        assert nutrition[0].name == "麦辣鸡腿汉堡"
         assert nutrition[0].calories_kcal == 560.0 and nutrition[0].protein_g == 25.0
-        quote = client.calculate_price("SZ-1001", [PlanItem(menu[0], 1)], [], "takeaway")
-        assert quote.ok and quote.total_cents == 2700
-        assert quote.discount_cents == 300 and quote.delivery_fee_cents == 0
+        assert nutrition[1].calories_kcal == 289.0
         # 审计记录不包含敏感字段
         for call in client.calls:
             assert "token" not in call["args"]
@@ -112,11 +188,35 @@ def test_sync_facade_end_to_end():
     client.close()
 
 
+def test_business_error_becomes_mcp_error():
+    """success=false 的业务错误（如缺 beCode）必须转成可读 MCPError。"""
+    client, _ = make_client(
+        {
+            "calculate-price": {
+                "success": False,
+                "code": 600048,
+                "message": "外送场景下，beType=2/5/6时必传beCode",
+            }
+        }
+    )
+    with client:
+        with pytest.raises(MCPError) as ei:
+            client.calculate_price(SCENE, [PlanItem(_item("1440"), 1)], [])
+    assert "beCode" in str(ei.value)
+    assert ei.value.code == 600048
+
+
+def _item(code):
+    from burger_quest.models import MenuItem
+
+    return MenuItem(code=code, name=code)
+
+
 def test_error_mapping_401():
     client, _ = make_client(errors={"query-meals": Exception("HTTP 401 Unauthorized")})
     with client:
         with pytest.raises(MCPError) as ei:
-            client.query_meals("X")
+            client.query_meals(SCENE)
     assert ei.value.code == 401
     assert "Token" in str(ei.value)
 
@@ -125,7 +225,7 @@ def test_error_mapping_429():
     client, _ = make_client(errors={"query-meals": Exception("429 Too Many Requests")})
     with client:
         with pytest.raises(MCPError) as ei:
-            client.query_meals("X")
+            client.query_meals(SCENE)
     assert ei.value.code == 429
 
 
@@ -133,7 +233,7 @@ def test_error_mapping_generic():
     client, _ = make_client(errors={"query-meals": Exception("boom")})
     with client:
         with pytest.raises(MCPError) as ei:
-            client.query_meals("X")
+            client.query_meals(SCENE)
     assert "boom" in str(ei.value)
     assert ei.value.code is None
 
