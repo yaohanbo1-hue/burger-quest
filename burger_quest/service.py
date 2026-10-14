@@ -340,12 +340,17 @@ def run_quest(
         result.gear_lines.extend(rpg.nutrition_lines(best, nutrition))
 
     # 11. 数据来源审计
+    nutrition_note = f"list-nutrition-foods（{len(nutrition)} 条）" if nutrition else "未获取"
+    if result.chosen is not None and result.chosen.nutrition_missing:
+        nutrition_note += (
+            "；推荐方案中 " + "、".join(result.chosen.nutrition_missing) + " 无营养数据（未猜测数值）"
+        )
     result.data_sources = {
         "server": client.source_note(),
         "store": store_source,
         "menu": f"query-meals @ {store.code}（{len(skeleton)} 个编码，详情 {len(named)} 个，有价 {len(priced)} 个）",
         "coupons": f"query-store-coupons + query-my-coupons（{len(coupons)} 张）",
-        "nutrition": f"list-nutrition-foods（{len(nutrition)} 条）" if nutrition else "未获取",
+        "nutrition": nutrition_note,
         "price": "calculate-price（价格发现 + 组合验价，金额单位：分）",
         "mode": _demo_note(client),
     }

@@ -1,15 +1,25 @@
-"""套餐规划引擎（业务逻辑层）。
+"""套餐规划引擎（业务逻辑层）——2026-10-14 升级版。
 
 铁律（对应比赛要求「不得编造餐品、价格、优惠或库存状态」）：
-1. 进入组合的餐品必须来自 query-meals 返回的真实菜单；
+1. 进入组合的餐品必须来自 query-meals 返回的真实菜单（或明确标记的演示数据）；
 2. 价格未知的餐品不进入任何组合（而不是猜一个价格）；
 3. 每个方案的「总价」只能来自 calculate-price 的权威返回；
-   calculate-price 失败时该方案标记为价格未校验，绝不用菜单价自行加总冒充权威价；
+   calculate-price 失败时该方案作废，绝不用菜单价自行加总冒充权威价；
 4. 优惠券必须来自 query-store-coupons / query-my-coupons 的真实返回；
-5. 库存/供应状态以 MCP 菜单返回为准，引擎不做任何库存假设。
+5. 不默认优惠可叠加：只有权威核验（calculate-price 的折扣字段）确认生效的
+   优惠才计入方案效果；预期与实际不符时如实备注，仍按权威结果计价；
+6. 营养偏好只用真实营养数据评估：部分缺失 -> 标注 + 降权（降低可信度）；
+   完全缺失 -> 排除候选。绝不猜测营养数值；
+7. 库存/供应状态以 MCP 菜单返回为准，引擎不做任何库存假设。
 
-为控制 MCP 调用次数（限流 600 次/分钟）：先用菜单价估算可负担性，
-只对排名靠前的候选组合发起 calculate-price（每个组合最多 3 次：无券/单券/双券）。
+升级要点（2026-10-14，目标体验：「预算 35 元，想吃辣，两个人，希望尽量高蛋白，
+不想点太多饮料」）：
+- 品类硬避免（「不要饮料」）与饮料软上限（「不想点太多饮料」-> 人数-1 份）；
+- 营养覆盖度跟踪（complete / missing），偏好场景下零覆盖排除、部分覆盖降权；
+- 最多 3 个可比较方案；每个方案附「符合 / 不完全符合」的简洁说明；
+- 失败诊断五分类（无价餐品 / 品类排除后无候选 / 算价全失败 / 预算筛除 /
+  营养数据缺失），每类附可操作建议，不编造成功套餐；
+- 金额全程 int 分；排序确定（同分按价格、编码），可复现。
 """
 from __future__ import annotations
 
@@ -23,9 +33,12 @@ from .models import (
     PlanItem,
     PlanOption,
     PriceQuote,
+    TASTE_CN,
     format_calories,
     format_yuan,
 )
+
+MAX_OPTIONS = 3  # 最多三个可比较方案
 
 # ---------------------------------------------------------------------------
 # 餐品分类（启发式，用于搭配均衡）
@@ -38,6 +51,8 @@ CATEGORY_RULES = [
     ("side", ["薯条", "薯", "鸡翅", "麦乐鸡", "玉米", "沙拉", "派", "洋葱圈", "小食", "薯饼"]),
 ]
 
+CATEGORY_CN = {"main": "主食", "side": "小食", "drink": "饮料", "dessert": "甜品", "other": "其他"}
+
 MOOD_AFFINITY = {
     "night": {"drink": 2, "soup": 2, "dessert": 1, "side": 1},
     "tired": {"main": 2, "side": 1, "dessert": 1},
@@ -45,6 +60,20 @@ MOOD_AFFINITY = {
     "refresh": {"veggie": 2, "soup": 2, "drink": 1, "dessert": -1},
     "happy": {"main": 1, "side": 1},
 }
+
+# 口味命中关键词（评分与「未满足」判定共用一张表，避免两处逻辑不一致）
+TASTE_HIT_KEYWORDS = {
+    "spicy": ("辣",),
+    "sweet": ("甜",),
+    "crispy": ("脆", "酥"),
+    "burger": ("堡",),
+    "chicken": ("鸡",),
+    "beef": ("牛",),
+    "fish": ("鱼",),
+    "veggie": ("素", "菜", "沙拉"),
+    "soup": ("汤",),
+}
+TASTE_HIT_SCORE = {"spicy": 4}  # 辣味权重更高；其余口味默认 3 分
 
 
 def classify(item: MenuItem) -> str:
@@ -55,32 +84,35 @@ def classify(item: MenuItem) -> str:
     return "other"
 
 
+def _item_text(item: MenuItem) -> str:
+    return item.name + " " + item.category + " " + " ".join(item.tags)
+
+
+def taste_hit(item: MenuItem, tastes: tuple) -> bool:
+    """餐品是否命中任一目标口味（用于 reasons/unmet 的简洁说明）。"""
+    if not tastes:
+        return False
+    text = _item_text(item)
+    for t in tastes:
+        if any(k in text for k in TASTE_HIT_KEYWORDS.get(t, ())):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # 评分
 # ---------------------------------------------------------------------------
 
 
 def taste_score(item: MenuItem, tastes: tuple) -> int:
-    text = item.name + " " + item.category + " " + " ".join(item.tags)
+    text = _item_text(item)
     score = 0
-    if "spicy" in tastes and ("辣" in text):
-        score += 4
-    if "sweet" in tastes and ("甜" in text or classify(item) == "dessert"):
-        score += 3
-    if "crispy" in tastes and ("脆" in text or "酥" in text):
-        score += 3
-    if "burger" in tastes and ("堡" in text):
-        score += 3
-    if "chicken" in tastes and ("鸡" in text):
-        score += 3
-    if "beef" in tastes and ("牛" in text):
-        score += 3
-    if "fish" in tastes and ("鱼" in text):
-        score += 3
-    if "veggie" in tastes and ("素" in text or "菜" in text or "沙拉" in text):
-        score += 3
-    if "soup" in tastes and ("汤" in text):
-        score += 3
+    for t in tastes:
+        if not any(k in text for k in TASTE_HIT_KEYWORDS.get(t, ())):
+            continue
+        if t == "sweet" and classify(item) == "dessert":
+            score += 3
+        score += TASTE_HIT_SCORE.get(t, 3)
     return score
 
 
@@ -134,6 +166,49 @@ def item_score(item: MenuItem, c: Constraints, nutrition: list[NutritionItem]) -
 
 
 # ---------------------------------------------------------------------------
+# 营养汇总（只统计有真实数据的餐品；缺失如实标注，绝不猜测）
+# ---------------------------------------------------------------------------
+
+
+def nutrition_summary(option: PlanOption, nutrition: list[NutritionItem]) -> tuple[dict, bool, list]:
+    """返回 (totals, complete, missing_names)。
+
+    - totals 只累加「有真实营养数据」的餐品（按份数加权）；
+    - complete=True 当且仅当全部餐品都有数据；
+    - missing_names 是缺数据的餐品名（去重，保序）。
+    """
+    totals = {"calories_kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0, "sodium_mg": 0.0}
+    missing: list[str] = []
+    found_any = False
+    for pi in option.items:
+        n = nutrition_of(pi.item, nutrition)
+        has_fields = n is not None and any(getattr(n, k, None) is not None for k in totals)
+        if not has_fields:
+            if pi.item.name not in missing:
+                missing.append(pi.item.name)
+            continue
+        found_any = True
+        for k in totals:
+            v = getattr(n, k, None)
+            if v is not None:
+                totals[k] += v * pi.qty
+    if not found_any:
+        return {}, False, missing
+    totals["calories_kcal"] = round(totals["calories_kcal"], 1)
+    totals["protein_g"] = round(totals["protein_g"], 1)
+    totals["fat_g"] = round(totals["fat_g"], 1)
+    totals["carb_g"] = round(totals["carb_g"], 1)
+    totals["sodium_mg"] = round(totals["sodium_mg"], 1)
+    return totals, not missing, missing
+
+
+def _sum_nutrition(opt: PlanOption, nutrition: list[NutritionItem]) -> dict:
+    """兼容入口（rpg 等使用）：无任何数据时返回 {}。"""
+    totals, _complete, _missing = nutrition_summary(opt, nutrition)
+    return totals
+
+
+# ---------------------------------------------------------------------------
 # 候选组合生成
 # ---------------------------------------------------------------------------
 
@@ -147,38 +222,64 @@ def _rank(items: list[MenuItem], c: Constraints, nutrition: list[NutritionItem],
 def _templates(c: Constraints) -> list[tuple[str, dict]]:
     """返回 [(模板名, 每类数量)]。
 
-    模板选择同时考虑人数与预算档位：预算越紧，组合越精简，
-    保证「预算内一定有候选」而不是直接失败。
+    模板选择同时考虑人数、预算档位与饮料偏好：
+    - 「不要饮料」-> 所有模板 drink=0；
+    - 「不想点太多饮料」-> drink 槽位封顶（软上限优先满足，不能满足时由
+      unmet 标注，不静默忽略偏好）；
+    - 预算越紧，组合越精简，保证「预算内一定有候选」而不是直接失败。
     """
     p = max(c.people, 1)
-    if p >= 2:
-        return [
-            ("share_feast", {"main": p, "side": p, "drink": p}),
-            ("share_value", {"main": p, "side": 1, "drink": 1}),
-        ]
+    avoid = set(c.avoid_categories)
+    cap = c.max_drink_qty
     budget = c.budget_cents
+
+    def drink_slots(n: int) -> int:
+        if "drink" in avoid:
+            return 0
+        if cap is not None:
+            return max(0, min(n, cap))
+        return n
+
+    if p >= 2:
+        tight = budget is not None and budget <= 4500
+        if tight:
+            # 紧预算多人：先给「轻量分享」（1 主食 + 小食），再给标准多人餐
+            return [
+                ("share_light", {"main": 1, "side": 1, "drink": drink_slots(1)}),
+                ("share_value", {"main": p, "side": 1, "drink": drink_slots(1)}),
+                ("share_lean", {"main": p, "side": 1, "drink": 0}),
+            ]
+        return [
+            ("share_feast", {"main": p, "side": p, "drink": drink_slots(p)}),
+            ("share_value", {"main": p, "side": 1, "drink": drink_slots(1)}),
+            ("share_lean", {"main": p, "side": 1, "drink": 0}),
+        ]
     if c.max_calories is not None:
         return [
-            ("light_meal", {"main": 1, "side": 0, "drink": 1}),
-            ("light_plus", {"main": 1, "side": 1, "drink": 1}),
+            ("light_meal", {"main": 1, "side": 0, "drink": drink_slots(1)}),
+            ("light_plus", {"main": 1, "side": 1, "drink": drink_slots(1)}),
             ("solo_main", {"main": 1}),
         ]
     if budget is not None and budget <= 2500:
         return [
-            ("mini_meal", {"main": 1, "side": 0, "drink": 1}),
+            ("mini_meal", {"main": 1, "side": 0, "drink": drink_slots(1)}),
             ("solo_main", {"main": 1}),
         ]
     if budget is not None and budget <= 4500:
         return [
-            ("value_meal", {"main": 1, "side": 1, "drink": 1}),
-            ("mini_meal", {"main": 1, "side": 0, "drink": 1}),
+            ("value_meal", {"main": 1, "side": 1, "drink": drink_slots(1)}),
+            ("mini_meal", {"main": 1, "side": 0, "drink": drink_slots(1)}),
             ("solo_main", {"main": 1}),
         ]
     return [
-        ("full_meal", {"main": 1, "side": 1, "drink": 1}),
-        ("double_main", {"main": 2, "side": 1, "drink": 1}),
+        ("full_meal", {"main": 1, "side": 1, "drink": drink_slots(1)}),
+        ("double_main", {"main": 2, "side": 1, "drink": drink_slots(1)}),
         ("solo_main", {"main": 1}),
     ]
+
+
+def _drink_qty(combo: list[PlanItem]) -> int:
+    return sum(pi.qty for pi in combo if classify(pi.item) == "drink")
 
 
 def _build_candidates(
@@ -187,7 +288,10 @@ def _build_candidates(
     nutrition: list[NutritionItem],
     max_candidates: int = 6,
 ) -> list[list[PlanItem]]:
-    ranked = {cat: _rank(menu, c, nutrition, cat) for cat in ("main", "side", "drink", "dessert")}
+    avoid = set(c.avoid_categories)
+    # 硬避免品类直接出局；价格未知同样出局（见 build_plan 的说明）
+    pool = [m for m in menu if m.price_cents is not None and classify(m) not in avoid]
+    ranked = {cat: _rank(pool, c, nutrition, cat) for cat in ("main", "side", "drink", "dessert")}
     candidates: list[list[PlanItem]] = []
     seen = set()
 
@@ -198,15 +302,21 @@ def _build_candidates(
         mains = ranked["main"]
         if not mains:
             continue
-        # 多人分享：优先两个不同主食各一份；单人双主食：同一主食两份
+        # 多人分享：优先两个不同主食各一份；单人双主食：同一主食两份。
+        # 紧预算时额外纳入最便宜主食（价格也是候选维度），并标注「主食少于人数」。
         main_combos: list[list[PlanItem]] = []
         if main_n >= 2 and c.people >= 2 and len(mains) >= 2:
             main_combos.append([PlanItem(mains[0], 1), PlanItem(mains[1], 1)])
         main_combos.append([PlanItem(mains[0], main_n)])
         if len(mains) > 1 and main_n == 1:
             main_combos.append([PlanItem(mains[1], 1)])
-        side_pool = ranked["side"][:1] if side_n else [None]
-        drink_pool = ranked["drink"][:1] if drink_n else [None]
+        if c.budget_cents is not None and c.budget_cents <= 4500 and len(mains) > 2:
+            cheapest = min(mains, key=lambda m: (m.price_cents or 0, m.code))
+            if all(pi.item.code != cheapest.code for combo in main_combos for pi in combo):
+                main_combos.append([PlanItem(cheapest, main_n)])
+        # 品类池为空时跳过该槽位（不是丢弃整个组合）
+        side_pool = ranked["side"][:1] if side_n and ranked["side"] else [None]
+        drink_pool = ranked["drink"][:1] if drink_n and ranked["drink"] else [None]
         for main_combo in main_combos:
             for s in side_pool:
                 for d in drink_pool:
@@ -222,16 +332,16 @@ def _build_candidates(
                     candidates.append(combo)
                     if len(candidates) >= max_candidates:
                         return candidates
-    # 兜底：菜单为空或没有主食时，用任意有价餐品凑一个「单人尝鲜」
+    # 兜底：菜单里没有主食（或全被避免）时，用池内任意有价餐品凑「单人尝鲜」
     if not candidates:
-        any_items = [i for i in menu if i.price_cents is not None][:2]
+        any_items = pool[:2]
         if any_items:
             candidates.append([PlanItem(i, 1) for i in any_items])
     return candidates
 
 
 # ---------------------------------------------------------------------------
-# 优惠券匹配
+# 优惠券匹配与效力核验
 # ---------------------------------------------------------------------------
 
 
@@ -246,16 +356,36 @@ def coupon_applies(coupon: Coupon, combo: list[PlanItem], estimated_original: in
 
 
 def coupon_sets(combo: list[PlanItem], coupons: list[Coupon], estimated_original: int) -> list[list[Coupon]]:
-    """生成待验价的优惠券组合（无券 + 每个可用单券 + 门店券×我的券最优双券）。"""
+    """生成待验价的优惠券组合：无券 + 每个可用单券 + 前若干可用券的两两组合。
+
+    注意：任何多券组合只是「试探」——是否真的可叠加由 calculate-price
+    权威核验决定，引擎不默认优惠可叠加（见 coupon_expected_discount /
+    coupon_note）；权威折扣与预期不符时如实备注，仍按权威结果计价。
+    """
     applicable = [c for c in coupons if coupon_applies(c, combo, estimated_original)]
     sets: list[list[Coupon]] = [[]]
     for c in applicable[:4]:
         sets.append([c])
-    store_best = next((c for c in applicable if c.source == "store"), None)
-    my_best = next((c for c in applicable if c.source == "my"), None)
-    if store_best and my_best and store_best.id != my_best.id:
-        sets.append([store_best, my_best])
+    # 两两组合（含同源券）：前 3 张可用券的全部 pairs，共 3 组，控制调用次数
+    top = applicable[:3]
+    for i in range(len(top)):
+        for j in range(i + 1, len(top)):
+            if top[i].id != top[j].id:
+                sets.append([top[i], top[j]])
     return sets
+
+
+def coupon_expected_discount(coupon: Coupon, combo: list[PlanItem], estimated_original: int) -> int:
+    """按券定义估算可省金额（分）——仅用于与权威折扣比对，从不进入总价。"""
+    if not coupon_applies(coupon, combo, estimated_original):
+        return 0
+    if coupon.kind == "percent" and coupon.percent:
+        base = estimated_original
+        if coupon.applicable_codes:
+            applicable = {pi.item.code for pi in combo} & set(coupon.applicable_codes)
+            base = sum(pi.item.price_cents * pi.qty for pi in combo if pi.item.code in applicable)
+        return int(round(base * (1.0 - coupon.percent)))
+    return int(coupon.value_cents or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +402,7 @@ def build_plan(
 ) -> tuple[list[PlanOption], list[str]]:
     """返回 (方案列表, 警告列表)。price_fn 是权威价格计算（MCP calculate-price）。"""
     warnings: list[str] = []
+    c = constraints
 
     priced = [m for m in menu if m.price_cents is not None]
     unpriced = [m for m in menu if m.price_cents is None]
@@ -284,26 +415,41 @@ def build_plan(
         warnings.append("当前门店没有带价格的餐品数据，无法生成方案")
         return [], warnings
 
-    candidates = _build_candidates(priced, constraints, nutrition)
+    candidates = _build_candidates(priced, c, nutrition)
     if not candidates:
-        warnings.append("没有找到符合口味/搭配要求的餐品组合")
+        if c.avoid_categories:
+            cats = "、".join(CATEGORY_CN.get(x, x) for x in c.avoid_categories)
+            warnings.append(
+                f"排除「{cats}」品类后没有可用餐品，无法生成方案；"
+                "可尝试取消该限制（例如改为「少点饮料」而非「不要饮料」）"
+            )
+        else:
+            warnings.append("没有找到符合口味/搭配要求的餐品组合")
         return [], warnings
 
     options: list[PlanOption] = []
     price_failed = 0
     budget_filtered = 0
-    fee_est = 900 if constraints.dining_mode == "delivery" else 0
+    nutrition_excluded = 0
+    fee_est = 900 if c.dining_mode == "delivery" else 0
     for combo in candidates:
         estimated = sum(pi.item.price_cents * pi.qty for pi in combo)
         # 预算预筛：估算价 + 配送费估算，留 25% 余量（优惠券可能拉低最终价），
         # 最终是否超预算以 calculate-price 权威结果为准
-        if constraints.budget_cents is not None:
-            if estimated + fee_est > int(constraints.budget_cents * 1.25):
+        if c.budget_cents is not None:
+            if estimated + fee_est > int(c.budget_cents * 1.25):
                 budget_filtered += 1
                 continue
+        # 营养预判（与券无关，避免浪费权威核验调用）：
+        # 有营养偏好且零覆盖 -> 整个组合作废（无法评估，不猜测）
+        probe = PlanOption(items=list(combo))
+        totals, complete, missing = nutrition_summary(probe, nutrition)
+        if c.has_nutrition_preference() and not totals:
+            nutrition_excluded += 1
+            continue
         best_for_combo: Optional[PlanOption] = None
         for cset in coupon_sets(combo, coupons, estimated):
-            quote = price_fn(combo, [c.id for c in cset])
+            quote = price_fn(combo, [c2.id for c2 in cset])
             if not quote.ok or quote.total_cents is None:
                 price_failed += 1
                 continue  # 权威计算失败：该券组合作废，不编造总价
@@ -316,64 +462,96 @@ def build_plan(
                 discount_cents=quote.discount_cents,
                 delivery_fee_cents=quote.delivery_fee_cents,
                 price_checked=True,
+                nutrition=totals,
+                nutrition_complete=complete,
+                nutrition_missing=list(missing),
             )
-            # 计算剩余预算与预算符合性
-            if constraints.budget_cents is not None:
-                opt.within_budget = opt.total_cents <= constraints.budget_cents
-                opt.remaining_cents = constraints.budget_cents - opt.total_cents
-            # 理由
-            opt.reasons = _build_reasons(opt, constraints, nutrition)
-            # 评分：口味契合 + 省下的钱 + 剩余预算
-            opt.score = _option_score(opt, constraints, nutrition)
-            if best_for_combo is None or opt.score > best_for_combo.score:
+            # 计算剩余预算与预算符合性（相等算预算内：remaining=0）
+            if c.budget_cents is not None:
+                opt.within_budget = opt.total_cents <= c.budget_cents
+                opt.remaining_cents = c.budget_cents - opt.total_cents
+            # 优惠核验：预期折扣 vs 权威折扣，不默认可叠加
+            expected = sum(coupon_expected_discount(c2, combo, estimated) for c2 in cset)
+            actual = opt.discount_cents or 0
+            if cset and expected != actual:
+                opt.coupon_note = (
+                    f"提交 {len(cset)} 张券，官方核验实际优惠 {format_yuan(actual)}"
+                    f"（按券面预估 {format_yuan(expected)}）——不默认优惠可叠加，已按权威结果计价"
+                )
+            if c.has_nutrition_preference() and not complete:
+                # 部分覆盖：保留但降低可信度（标注 + 降权）
+                opt.warnings.append(
+                    "营养数据不完整："
+                    + "、".join(missing)
+                    + " 无营养记录，蛋白/热量结论可能偏低（未猜测数值）"
+                )
+            opt.reasons = _build_reasons(opt, c, nutrition)
+            opt.unmet = _build_unmet(opt, c)
+            opt.score = _option_score(opt, c, nutrition)
+            # 同分决胜：总价更低者胜（同样餐品同样评分时，省更多的方案优先）
+            rank = (opt.score, -(opt.total_cents or 0))
+            if best_for_combo is None or rank > (best_for_combo.score, -(best_for_combo.total_cents or 0)):
                 best_for_combo = opt
         if best_for_combo is not None:
             options.append(best_for_combo)
 
-    # 排序：优先预算内、其次分数、再次低价
+    # 排序：优先预算内、其次分数、再次低价（同分按总价与餐品编码，保证确定性）
     def sort_key(o: PlanOption):
         return (
             0 if o.within_budget else 1 if o.within_budget is False else 0,
             -o.score,
             o.total_cents or 10**9,
+            tuple(sorted((pi.item.code, pi.qty) for pi in o.items)),
         )
 
     options.sort(key=sort_key)
 
-    # 预算内过滤：若设置了预算且存在预算内方案，只保留预算内（外加一个最优参考）
-    if constraints.budget_cents is not None:
+    # 最多三个可比较方案：预算内有则取预算内 Top3；否则给至多 2 个最接近参考
+    if c.budget_cents is not None:
         within = [o for o in options if o.within_budget]
         if within:
-            keep = within[:3]
-            reference = next((o for o in options if not o.within_budget), None)
-            options = keep + ([reference] if reference else [])
+            options = within[:MAX_OPTIONS]
         elif options:
             warnings.append(
-                f"没有组合能落在 {format_yuan(constraints.budget_cents)} 预算内；"
-                f"以下为最接近的真实价格方案（总价以 calculate-price 为准）"
+                f"没有组合能落在 {format_yuan(c.budget_cents)} 预算内；"
+                f"以下 {min(len(options), 2)} 个为最接近的真实价格方案（总价以 calculate-price 为准，未编造任何价格）"
             )
             options = options[:2]
         else:
             options = []
 
+    if len(options) > MAX_OPTIONS:
+        options = options[:MAX_OPTIONS]
+
     if not options:
-        # 空结果诊断：区分「预算筛掉」「价格计算失败」「无搭配」三种原因，如实说明
+        # 空结果诊断：分类说明原因，每类附可操作建议——不编造成功套餐
         if price_failed and not budget_filtered:
             warnings.append(
                 f"所有候选组合的权威价格计算均失败（calculate-price 返回 {price_failed} 次失败），"
-                "无法给出方案（未编造任何价格）"
+                "无法给出方案（未编造任何价格）；请稍后重试或检查网络"
             )
         elif budget_filtered:
             warnings.append(
-                f"没有组合能落在 {format_yuan(constraints.budget_cents)} 预算内"
-                f"（{budget_filtered} 个候选组合因估算价超出预算被跳过，其余逐一用权威价格核验；未编造任何价格）"
+                f"没有组合能落在 {format_yuan(c.budget_cents)} 预算内"
+                f"（{budget_filtered} 个候选组合因估算价超出预算被跳过，其余逐一用权威价格核验；未编造任何价格）。"
+                "可尝试：适当提高预算，或减少人数/品类要求"
+            )
+        elif nutrition_excluded:
+            warnings.append(
+                "候选组合缺少营养数据，无法按营养偏好（蛋白/热量）评估，已全部排除（不猜测营养数值）。"
+                "可尝试：取消营养偏好，或更换门店"
             )
         else:
             warnings.append("没有找到符合搭配要求的餐品组合")
 
     for o in options:
-        o.title = _option_title(o, constraints)
+        o.title = _option_title(o, c)
     return options, warnings
+
+
+# ---------------------------------------------------------------------------
+# 方案说明（符合 / 不完全符合）
+# ---------------------------------------------------------------------------
 
 
 def _build_reasons(opt: PlanOption, c: Constraints, nutrition: list[NutritionItem]) -> list[str]:
@@ -381,49 +559,68 @@ def _build_reasons(opt: PlanOption, c: Constraints, nutrition: list[NutritionIte
     tastes = c.tastes
     hit = []
     for pi in opt.items:
-        t = pi.item.name + " ".join(pi.item.tags)
-        if "spicy" in tastes and "辣" in t:
-            hit.append(pi.item.name)
-        if "crispy" in tastes and ("脆" in t or "酥" in t):
+        if taste_hit(pi.item, tastes):
             hit.append(pi.item.name)
     if hit:
         reasons.append("口味命中：" + "、".join(dict.fromkeys(hit)))
     if opt.discount_cents:
-        reasons.append(f"优惠券已省 {format_yuan(opt.discount_cents)}")
-    if c.budget_cents is not None and opt.remaining_cents is not None:
-        if opt.remaining_cents >= 0:
-            reasons.append(f"剩余预算 {format_yuan(opt.remaining_cents)}")
-        else:
-            reasons.append(f"超预算 {format_yuan(-opt.remaining_cents)}")
-    n = _sum_nutrition(opt, nutrition)
+        reasons.append(f"优惠券已省 {format_yuan(opt.discount_cents)}（权威核验）")
+    if c.budget_cents is not None and opt.remaining_cents is not None and opt.remaining_cents >= 0:
+        reasons.append(f"预算内，剩余 {format_yuan(opt.remaining_cents)}")
+    n = opt.nutrition or {}
     if n.get("calories_kcal") is not None:
         reasons.append(f"整餐热量 {format_calories(n['calories_kcal'])}")
     if c.max_calories and n.get("calories_kcal") is not None and n["calories_kcal"] <= c.max_calories:
         reasons.append("满足低卡偏好")
     if c.min_protein_g and n.get("protein_g") is not None and n["protein_g"] >= c.min_protein_g:
-        reasons.append(f"蛋白质 {n['protein_g']:.0f}g 达标")
+        reasons.append(f"蛋白质 {n['protein_g']:.0f}g 达标（偏好 ≥{c.min_protein_g:.0f}g）")
+    if c.max_drink_qty is not None:
+        drinks = _drink_qty(opt.items)
+        if drinks <= c.max_drink_qty:
+            reasons.append(f"饮料 {drinks} 份，符合少饮偏好（≤{c.max_drink_qty}）")
+    if c.people >= 2:
+        main_qty = sum(pi.qty for pi in opt.items if classify(pi.item) == "main")
+        if main_qty >= c.people:
+            reasons.append(f"主食 {main_qty} 份，够 {c.people} 人分食")
     if not reasons:
         reasons.append("当前门店真实在售且价格校验通过的基础搭配")
     return reasons
 
 
-def _sum_nutrition(opt: PlanOption, nutrition: list[NutritionItem]) -> dict:
-    total = {"calories_kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0, "sodium_mg": 0.0}
-    found = False
-    for pi in opt.items:
-        n = nutrition_of(pi.item, nutrition)
-        if not n:
-            continue
-        found = True
-        for k in total:
-            v = getattr(n, k, None)
-            if v is not None:
-                total[k] += v * pi.qty
-    if not found:
-        return {}
-    total["calories_kcal"] = round(total["calories_kcal"], 1)
-    total["protein_g"] = round(total["protein_g"], 1)
-    return total
+def _build_unmet(opt: PlanOption, c: Constraints) -> list[str]:
+    """未完全满足的条件——简洁、如实，不隐瞒（对应「说明为什么不完全符合」）。"""
+    unmet = []
+    if c.budget_cents is not None and opt.within_budget is False and opt.remaining_cents is not None:
+        unmet.append(f"超出预算 {format_yuan(-opt.remaining_cents)}")
+    if c.people >= 2:
+        main_qty = sum(pi.qty for pi in opt.items if classify(pi.item) == "main")
+        if main_qty < c.people:
+            unmet.append(f"主食 {main_qty} 份，少于 {c.people} 人（轻量分享，可能吃不饱）")
+    if c.max_drink_qty is not None:
+        drinks = _drink_qty(opt.items)
+        if drinks > c.max_drink_qty:
+            unmet.append(f"饮料 {drinks} 份，超过少饮偏好上限 {c.max_drink_qty} 份")
+    if c.min_protein_g is not None:
+        protein = (opt.nutrition or {}).get("protein_g")
+        if protein is None:
+            unmet.append("营养数据不足，无法确认蛋白质是否达标")
+        elif protein < c.min_protein_g:
+            unmet.append(f"蛋白质 {protein:.0f}g，未达偏好 {c.min_protein_g:.0f}g")
+    if c.max_calories is not None:
+        cal = (opt.nutrition or {}).get("calories_kcal")
+        if cal is None:
+            unmet.append("营养数据不足，无法确认热量是否达标")
+        elif cal > c.max_calories:
+            unmet.append(f"热量 {cal:.0f} 千卡，超过上限 {c.max_calories:.0f} 千卡")
+    if c.tastes and not any(taste_hit(pi.item, c.tastes) for pi in opt.items):
+        unmet.append("口味偏好（" + "/".join(TASTE_CN.get(t, t) for t in c.tastes) + "）未被任何餐品命中")
+    if c.has_nutrition_preference() and not opt.nutrition_complete:
+        unmet.append(
+            "营养数据缺失：" + "、".join(opt.nutrition_missing) + "（结论可能不完整，未猜测数值）"
+        )
+    if opt.coupon_note:
+        unmet.append(opt.coupon_note)
+    return unmet
 
 
 def _option_score(opt: PlanOption, c: Constraints, nutrition: list[NutritionItem]) -> float:
@@ -431,7 +628,7 @@ def _option_score(opt: PlanOption, c: Constraints, nutrition: list[NutritionItem
     for pi in opt.items:
         score += item_score(pi.item, c, nutrition) * pi.qty
     if opt.discount_cents:
-        score += min(opt.discount_cents / 100.0, 5.0)  # 省钱加分，封顶 5
+        score += min(opt.discount_cents / 100.0, 5.0)  # 省钱加分，封顶 5（仅权威折扣）
     if c.budget_cents is not None and opt.remaining_cents is not None and opt.remaining_cents >= 0:
         if c.rich:
             # 丰盛偏好：鼓励把预算用得更充分（越接近预算加分越多），封顶 3
@@ -440,6 +637,19 @@ def _option_score(opt: PlanOption, c: Constraints, nutrition: list[NutritionItem
         else:
             # 默认：剩余预算加分（省钱导向），封顶 3
             score += min(opt.remaining_cents / 100.0, 3.0)
+    # 营养偏好：蛋白/热量达标注加成；数据不完整降权（降低可信度）
+    n = opt.nutrition or {}
+    if c.min_protein_g is not None and n.get("protein_g") is not None and n["protein_g"] >= c.min_protein_g:
+        score += 2.0
+    if c.max_calories is not None and n.get("calories_kcal") is not None and n["calories_kcal"] <= c.max_calories:
+        score += 2.0
+    if c.has_nutrition_preference() and not opt.nutrition_complete:
+        score -= 2.0
+    # 软偏好未满足：降权
+    if any("超过少饮偏好上限" in u for u in opt.unmet):
+        score -= 3.0
+    if c.tastes and not any(taste_hit(pi.item, c.tastes) for pi in opt.items):
+        score -= 2.0
     # 丰盛偏好：品类多样性加分
     if c.rich:
         cats = {classify(pi.item) for pi in opt.items}
@@ -456,6 +666,8 @@ def _option_title(opt: PlanOption, c: Constraints) -> str:
         base = f"{n} 人分享阵型"
     elif c.max_calories is not None:
         base = "轻装低卡阵型"
+    elif c.min_protein_g is not None:
+        base = "高能蛋白阵型"
     elif c.budget_cents is not None and opt.total_cents and opt.total_cents <= c.budget_cents:
         base = "省钱精算阵型"
     elif cats.count("main") >= 2:

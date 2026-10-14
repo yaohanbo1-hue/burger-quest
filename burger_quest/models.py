@@ -140,8 +140,14 @@ class Constraints:
     min_protein_g: Optional[float] = None
     rich: bool = False  # 丰盛偏好：预算内优先更丰富的组合
     prefer_combo: bool = True
+    avoid_categories: tuple = ()  # 明确不要的品类（如 ("drink",)——「不要饮料」）
+    max_drink_qty: Optional[int] = None  # 饮料数量软上限（「不想点太多饮料」；None=不限制）
     raw_text: str = ""
     notes: tuple = ()  # 解析过程中的提示（如"未识别到预算"）
+
+    def has_nutrition_preference(self) -> bool:
+        """用户是否表达了营养偏好（决定营养数据缺失时是否降权/排除候选）。"""
+        return self.max_calories is not None or self.min_protein_g is not None
 
     def describe(self) -> str:
         parts = []
@@ -156,6 +162,12 @@ class Constraints:
             parts.append("口味 " + "/".join(TASTE_CN.get(t, t) for t in self.tastes))
         if self.max_calories:
             parts.append(f"热量 ≤ {self.max_calories:.0f} 千卡")
+        if self.min_protein_g:
+            parts.append(f"蛋白质 ≥ {self.min_protein_g:.0f}g")
+        if "drink" in self.avoid_categories:
+            parts.append("不要饮料")
+        elif self.max_drink_qty is not None:
+            parts.append(f"饮料 ≤ {self.max_drink_qty} 份")
         return "，".join(parts)
 
 
@@ -174,9 +186,9 @@ class PlanItem:
 class PlanOption:
     """一个可执行的点餐方案。total_cents 只能来自 calculate-price 权威结果。"""
 
-    title: str
+    title: str = ""
     items: list = field(default_factory=list)  # list[PlanItem]
-    coupons: list = field(default_factory=list)  # list[Coupon]
+    coupons: list = field(default_factory=list)  # list[Coupon]（提交核验的券）
     total_cents: Optional[int] = None  # calculate-price 返回的应付总价（分）
     original_cents: Optional[int] = None
     discount_cents: Optional[int] = None
@@ -184,8 +196,12 @@ class PlanOption:
     within_budget: Optional[bool] = None
     remaining_cents: Optional[int] = None
     reasons: list = field(default_factory=list)  # 选择理由（全部有事实依据）
+    unmet: list = field(default_factory=list)  # 未完全满足的条件（简洁说明，不隐瞒）
     warnings: list = field(default_factory=list)
     nutrition: dict = field(default_factory=dict)  # {calories, protein_g, ...} 或 {}
+    nutrition_complete: bool = True  # 营养数据是否覆盖全部餐品（缺失时 False）
+    nutrition_missing: list = field(default_factory=list)  # 缺营养数据的餐品名
+    coupon_note: str = ""  # 优惠核验备注（如「提交的券未产生优惠，已按权威结果计价」）
     score: float = 0.0
     price_checked: bool = False  # 是否经过 calculate-price 校验
 

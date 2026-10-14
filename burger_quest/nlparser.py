@@ -49,6 +49,18 @@ HIGH_PROTEIN_PAT = re.compile(r"(高蛋白|增肌|健身|补充蛋白|蛋白质)
 CAL_LIMIT_PAT = re.compile(r"(?:热量|卡路里)?\s*(?:不超过?|低于?|控制在?|最多)\s*(\d{2,5})\s*(?:千卡|大卡|kcal|卡)")
 PROTEIN_MIN_PAT = re.compile(r"蛋白质?\s*(?:至少|不低于|超过?|大于)\s*(\d+(?:\.\d+)?)\s*(?:g|克)")
 
+# 饮料偏好（2026-10-14 规划引擎升级）
+# 软上限（优先判定）：「不想点太多饮料 / 别点太多饮料 / 少点饮料 / 饮料少一点 / 多主食少饮料」
+LESS_DRINK_PAT = re.compile(
+    r"(?:不想点太多饮料|别点太多饮料|不要点太多饮料|点太多饮料|太多饮料|"
+    r"少(?:点|一些|一点)?饮料|饮料少(?:点|一些|一点)|多主食少饮料|饮料适量)"
+)
+# 硬避免：「不要饮料 / 不点饮料 / 不想喝饮料 / 饮料去掉 / 无饮料 / 免饮料」
+AVOID_DRINK_PAT = re.compile(
+    r"(?:不要|不点|不想喝?|去掉|免了?|无)(?:点|些|任何)?饮料"
+    r"|饮料(?:就?)?(?:不要|免|去掉|不用)"
+)
+
 BUDGET_PATTERNS = [
     # ¥30 / ￥30 / 30元 / 30块 / 30 RMB
     re.compile(r"[¥￥]\s*(\d+(?:\.\d+)?)"),
@@ -62,12 +74,16 @@ STORE_CODE_PAT = re.compile(r"(?:门店|店铺|餐厅)?\s*(?:编码|code|编号)
 LOCATION_PATTERNS = [
     re.compile(r"(?:送到|送至|配送|外卖)(?:到|至)?\s*([^，。,.!！?？;；\s]{2,20})"),
     re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*(?:的?麦当劳|吃|点|下单|取餐)"),
+    # 句尾位置：「……，在深圳市南山区科技园」（2026-10-14 补充：尾部「在X」）
+    re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*$"),
     re.compile(r"附近\s*([^，。,.!！?？;；\s]{2,20})"),
 ]
 CHINESE_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 # 常见语气词/停用字，位置名词里去掉
-LOCATION_STOP = ("麦当劳", "麦门", "门店", "餐厅", "店铺", "附近", "这里", "那边")
+LOCATION_STOP = ("麦当劳", "麦门", "门店", "餐厅", "店铺", "附近", "这里", "那边", "店里")
+# 疑问片段：不是位置（「附近有什么」「在哪」等）
+LOCATION_QUESTION = ("什么", "哪些", "哪家", "哪里", "哪儿", "多少", "怎么")
 
 
 def _match_any(text: str, keywords) -> Optional[str]:
@@ -141,7 +157,7 @@ def parse_location(text: str) -> Optional[str]:
             for stop in LOCATION_STOP:
                 loc = loc.replace(stop, "")
             loc = loc.strip()
-            if len(loc) >= 2:
+            if len(loc) >= 2 and not any(q in loc for q in LOCATION_QUESTION):
                 return loc
     return None
 
@@ -189,6 +205,18 @@ def parse(text: str) -> Constraints:
         min_protein = float(m.group(1))
         notes.append(f"按用户指定蛋白质下限 {min_protein:.0f}g 筛选")
 
+    # 饮料偏好：软上限（「不想点太多」）优先于硬避免（「不要饮料」）
+    avoid_categories: tuple = ()
+    max_drink_qty: Optional[int] = None
+    if LESS_DRINK_PAT.search(text):
+        max_drink_qty = max(1, people - 1)
+        notes.append(
+            f"识别到「少点饮料」偏好，饮料数量上限 {max_drink_qty} 份（尽量满足，无法满足时会明示）"
+        )
+    elif AVOID_DRINK_PAT.search(text):
+        avoid_categories = ("drink",)
+        notes.append("识别到「不要饮料」，候选组合将不含饮品")
+
     if budget is None:
         notes.append("未识别到预算，将不设预算上限（仍会标注真实总价）")
     if not dining_mode_matched(text):
@@ -211,6 +239,8 @@ def parse(text: str) -> Constraints:
         max_calories=max_cal,
         min_protein_g=min_protein,
         rich=rich,
+        avoid_categories=avoid_categories,
+        max_drink_qty=max_drink_qty,
         raw_text=text,
         notes=tuple(notes),
     )

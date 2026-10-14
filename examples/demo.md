@@ -91,3 +91,19 @@ python -m burger_quest stores "深圳市南山区科技园"    # 真实模式（
 预期要点：输出门店列表（名称 + 编码 + 地址），并提示用 `--store-code` 继续。真实模式实测（2026-10-13）：「深圳市南山区科技园」返回 5 家真实门店。
 
 > 备注：demo 场景未提供位置时使用默认演示门店（DEMO-001）并在提示中明确声明；真实模式没有位置信息时会要求补充，不会假设门店。
+
+---
+
+## 套餐规划引擎演示（2026-10-14 升级）
+
+规划引擎升级后的四个可重复离线演示（含每个演示验证的约束）见
+[planner_demos.md](planner_demos.md)：
+
+```bash
+python -m burger_quest demo "预算 35 元，想吃辣，两个人，希望尽量高蛋白，不想点太多饮料"  # 多条件综合
+python -m burger_quest demo "预算12块，想吃辣"                                          # 超预算参考
+python -m burger_quest demo "不要饮料，预算20"                                          # 品类硬避免
+python -m burger_quest demo "预算5块，想吃汉堡"                                         # 无可行解（可解释失败）
+```
+
+自动化断言：`python -m pytest tests/test_planner_demos.py -v`

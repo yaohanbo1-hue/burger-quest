@@ -152,6 +152,8 @@ def price_lines(option: PlanOption, c: Constraints) -> list[str]:
 def nutrition_lines(option: PlanOption, nutrition: list) -> list[str]:
     n = _sum_nutrition(option, nutrition)
     if not n:
+        if option.nutrition_missing:
+            return ["🧪 属性面板：营养数据缺失（" + "、".join(option.nutrition_missing) + "），未展示数值——不猜测"]
         return []
     out = []
     if n.get("calories_kcal") is not None:
@@ -160,4 +162,6 @@ def nutrition_lines(option: PlanOption, nutrition: list) -> list[str]:
         out.append(f"蛋白质约 {n['protein_g']:.0f}g")
     if n.get("fat_g") is not None:
         out.append(f"脂肪约 {n['fat_g']:.0f}g")
+    if not option.nutrition_complete:
+        out.append("（部分餐品无营养数据，数值可能偏低——未猜测）")
     return ["🧪 属性面板：" + "，".join(out)] if out else []

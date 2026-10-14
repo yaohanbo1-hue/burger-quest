@@ -33,6 +33,7 @@ from pathlib import Path
 
 from . import __version__
 from .mcp_base import MCPError, TOOLS_RESERVED, TOOLS_USED
+from .models import format_yuan
 from .service import run_quest
 
 
@@ -53,6 +54,28 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
         print("\n【价格结算】")
         for line in rpg.price_lines(result.chosen, c):
             print("  " + line)
+    if len(result.options) > 1:
+        print("\n【方案对比】按推荐顺序排列（最多 3 个可比较方案；总价均为 calculate-price 权威结果）：")
+        for i, o in enumerate(result.options, 1):
+            mark = "👉" if o is result.chosen else "  "
+            budget_tag = ""
+            if o.within_budget is True:
+                budget_tag = "预算内"
+            elif o.within_budget is False:
+                budget_tag = "超预算"
+            total = format_yuan(o.total_cents) if o.total_cents is not None else "价格未校验"
+            print(f"  {mark} [{i}] {o.title} —— {o.item_names()}（{total}{('，' + budget_tag) if budget_tag else ''}）")
+            for r in o.reasons:
+                print(f"        ✅ {r}")
+            for u in o.unmet:
+                print(f"        ⚠️ 不完全符合：{u}")
+            for w in o.warnings:
+                print(f"        ⚠️ {w}")
+    elif result.chosen is not None:
+        for u in result.chosen.unmet:
+            print(f"\n⚠️ 不完全符合：{u}")
+        for w in result.chosen.warnings:
+            print(f"⚠️ {w}")
     if result.store_candidates:
         print("\n【候选门店】找到多家附近门店，请选择一家后重新运行（未查询菜单、未生成任何价格）：")
         for i, s in enumerate(result.store_candidates, 1):
@@ -100,7 +123,11 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
                     "within_budget": o.within_budget,
                     "remaining_cents": o.remaining_cents,
                     "reasons": o.reasons,
+                    "unmet": o.unmet,
                     "nutrition": o.nutrition,
+                    "nutrition_complete": o.nutrition_complete,
+                    "nutrition_missing": o.nutrition_missing,
+                    "price_checked": o.price_checked,
                 }
                 for o in result.options
             ],

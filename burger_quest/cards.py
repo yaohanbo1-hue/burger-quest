@@ -43,6 +43,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .price .row {{ display:flex; justify-content:space-between; font-size:14px; padding:3px 0; }}
   .price .total {{ font-size:18px; font-weight:800; color:#da291c; }}
   .reasons li {{ font-size:13px; color:#6b5a3e; margin:4px 0; }}
+  .unmet li {{ font-size:13px; color:#a0630f; margin:4px 0; }}
+  .unmet {{ padding-left:20px; }}
   .meta {{ margin-top:18px; border-top:1px solid #eee2c8; padding-top:12px; font-size:12px; color:#8a7a5c; line-height:1.7; }}
   .meta b {{ color:#a0630f; }}
   .disclaimer {{ margin-top:10px; font-size:11px; color:#b04a3a; background:#fdf3f2; border-radius:8px; padding:8px 12px; }}
@@ -64,6 +66,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="price">{price_rows}</div>
     <h3>智 囊 团 备 注</h3>
     <ul class="reasons">{reasons}</ul>
+    {unmet_block}
     <div class="meta">
       <div><b>冒险者需求：</b>{constraints}</div>
       <div><b>数据来源：</b>{source}</div>
@@ -98,6 +101,14 @@ def render_html(
     reasons = "".join(f"<li>{e(r)}</li>" for r in option.reasons)
     if not option.reasons:
         reasons = "<li>（无）</li>"
+    if option.unmet:
+        unmet_block = (
+            '<h3>不 完 全 符 合</h3><ul class="unmet">'
+            + "".join(f"<li>⚠️ {e(u)}</li>" for u in option.unmet)
+            + "</ul>"
+        )
+    else:
+        unmet_block = ""
     return _HTML_TEMPLATE.format(
         title=f"{PROJECT_NAME} - 任务成就卡",
         project=e(PROJECT_NAME),
@@ -107,6 +118,7 @@ def render_html(
         gear=gear,
         price_rows=rows,
         reasons=reasons,
+        unmet_block=unmet_block,
         constraints=e(constraints.describe()),
         source=e(source_note),
         generated_at=e(generated_at),
@@ -144,6 +156,11 @@ def render_markdown(
     lines.append("## 智囊团备注")
     for r in option.reasons:
         lines.append(f"- {r}")
+    if option.unmet:
+        lines.append("")
+        lines.append("## 不完全符合")
+        for u in option.unmet:
+            lines.append(f"- ⚠️ {u}")
     lines.append("")
     lines.append("---")
     lines.append(f"- 冒险者需求：{constraints.describe()}")
