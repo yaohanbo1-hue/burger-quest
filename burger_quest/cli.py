@@ -13,6 +13,11 @@
   # 先查询附近门店（获取真实门店编码）
   python -m burger_quest stores "南山科技园"
 
+  # 只读 MCP 冒烟测试（连接/工具发现/关键查询；不调用任何写操作）
+  python -m burger_quest smoke --demo        # 离线可重复执行
+  export MCD_MCP_TOKEN="你的Token"
+  python -m burger_quest smoke               # 真实服务七步只读检查
+
   # 查看引擎实际调用的 MCP 工具清单
   python -m burger_quest tools
 
@@ -162,6 +167,7 @@ def main(argv=None) -> int:
             '  python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest stores "南山科技园"\n'
+            "  python -m burger_quest smoke --demo\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -219,6 +225,24 @@ def main(argv=None) -> int:
     p_stores.add_argument("--demo", action="store_true", help="使用演示数据（离线）")
     p_stores.add_argument("--fixture", default=None, help="演示数据 JSON 路径（仅 --demo 有效）")
 
+    p_smoke = sub.add_parser(
+        "smoke",
+        help="只读 MCP 冒烟测试：连接/工具发现/关键查询（--demo 离线可重复；真实模式需 Token）",
+        description=(
+            "只读 MCP 冒烟测试：连接 -> 工具发现 -> now-time-info -> query-nearby-stores\n"
+            "-> query-meals -> query-meal-detail -> calculate-price，逐步报告 PASS/FAIL。\n"
+            "Token 只从环境变量 MCD_MCP_TOKEN 读取，绝不打印；\n"
+            "只调用只读工具，不调用下单/取消/资金等任何写操作。\n"
+            "加 --demo 使用内置演示数据离线执行（可重复、无需 Token）。\n"
+            "退出码：0=全部通过；1=有步骤失败；2=配置错误。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_smoke.add_argument("--location", default="深圳市南山区科技园", help="探测位置（默认「深圳市南山区科技园」）")
+    p_smoke.add_argument("--store-code", default=None, help="直接指定门店编码（跳过门店查询）")
+    p_smoke.add_argument("--demo", action="store_true", help="离线演示模式：使用内置演示数据（无需 Token，可重复执行）")
+    p_smoke.add_argument("--json", default=None, help="冒烟结果 JSON 输出路径")
+
     sub.add_parser("tools", help="列出引擎实际调用的 MCP 工具")
 
     args = parser.parse_args(argv)
@@ -234,6 +258,18 @@ def main(argv=None) -> int:
 
     if args.cmd == "stores":
         return _cmd_stores(args)
+
+    if args.cmd == "smoke":
+        from . import smoke
+
+        argv = ["--location", args.location]
+        if args.store_code:
+            argv += ["--store-code", args.store_code]
+        if args.demo:
+            argv.append("--demo")
+        if args.json:
+            argv += ["--json", str(args.json)]
+        return smoke.main(argv)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

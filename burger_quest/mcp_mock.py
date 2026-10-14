@@ -20,6 +20,7 @@ from .mcp_base import (
     MCPClient,
     MCPError,
     OrderScene,
+    TOOLS_USED,
     adapt_coupons,
     adapt_meal_detail,
     adapt_meals,
@@ -72,6 +73,14 @@ class MockMCPClient(MCPClient):
 
     def now_time(self) -> dict:
         return adapt_time(self.data.get("now_time_info", {}))
+
+    def list_tools(self) -> list[dict]:
+        """演示版工具发现：只返回引擎实际调用的 8 个工具（无官方 Schema）。
+
+        冒烟测试 --demo 模式用它做离线重复执行；真实 Schema 以官方服务为准。
+        """
+        self._record("list_tools", {}, True)
+        return [{"name": t, "description": "（演示数据，非官方 Schema）", "input_schema": None} for t in TOOLS_USED]
 
     def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1):
         """演示用附近门店查询（searchType=2 按位置）。

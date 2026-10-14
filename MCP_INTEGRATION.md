@@ -134,6 +134,67 @@
 2. **外送全链路**：需要账户已保存配送地址（联调账户无地址，已实测「无地址」分支的明确说明）；
 3. **套餐换选 / 特制选项**（`rounds` 换项、`modification` 特制键）：MVP 不展示，接口已预留。
 
+## 3.7 集成复查记录（2026-10-14，阶段 5：MCP 集成专项审查）
+
+本次复查用真实 Token 经**项目自己的客户端**（`HttpMCPClient`，官方 mcp Python SDK 薄封装）
+重新做了一轮工具发现与链路验证，并修补了两处协议层缺口。
+
+### 官方 SDK 核实（无自研协议）
+
+- 代码审计确认：`burger_quest/` 内**没有任何**裸 HTTP 实现（无 `requests`/`urllib`/`aiohttp`）；
+  唯一 HTTP 相关 import 是 `httpx2`（SDK 自带），仅用于给官方 `streamable_http_client`
+  工厂构造带 Authorization 的 `AsyncClient`——传输仍由官方 SDK 完成；
+- 实测环境 SDK 已从联调时的 **1.27.2 升级到 2.3.0**，逐项复核兼容层：
+
+| 2.3.0 实测 | 兼容层处理 |
+| --- | --- |
+| 导出名只剩 `streamable_http_client` | `_import_stream_client()` 先试旧名再试新名，实测取到新名 |
+| 工厂签名 `(url, http_client, terminate_on_close, max_sse_event_size)`，无 `headers` | `_transport_kwargs` 按签名分流，实测走 `http_client` 分支 |
+| transport yield `(read, write)` 2 元组 | 只取前两个值，实测通过 |
+| `list_tools()` 返回 `ListToolsResult` 模型（1.x 是裸 list） | `list_tools()` 双形态兼容（`.tools` / list） |
+| `call_tool` 返回 `CallToolResult`，`.content` 不变 | `parse_tool_text` 继续可用 |
+
+### 工具发现（`list_tools` 实测，35 个工具）
+
+官方清单共 **35 个工具**；项目 `TOOLS_USED`（8 个）与 `TOOLS_RESERVED`（8 个）全部在列。
+本次逐个核对了 8 个在用工具的官方输入 Schema，与 `mcp_http.py` 实际传参**完全一致**
+（含 `query-meal-detail` 的编码参数名是 `code`、`calculate-price` 的
+`items[].productCode/quantity/couponId`、`query-nearby-stores` 的 `beType+searchType` 组合）。
+另发现官方 Schema 明确约定：**到店自提场景（orderType=1）传 beCode 会报错**——
+客户端按 `scene.be_code` 为空即不传的方式已天然规避。
+
+### 两条错误通道（本次补齐的缺口）
+
+| 通道 | 形态 | 处理 |
+| --- | --- | --- |
+| 业务错误 | 文本信封 `success=false`（实测：缺参 → code=400「缺少参数」；`DEMO-001` → 「storeCode门店编码必须全部由数字组成」） | `check_envelope` → 可读 MCPError（原有） |
+| 协议错误 | SDK/协议层 `isError=True` / JSON-RPC 异常（实测：未知工具名 → `McpError: unknown tool`） | **本次新增**：`_call()` 检查 `is_error`/`isError`，有错即抛 MCPError 并记审计，绝不让未知形态静默流入适配器 |
+
+原则不变：**不允许「任何未知格式都猜一个价格/名称」后继续往下走**——算价缺总价即
+`ok=False`，服务层据此停止出方案。
+
+### 只读冒烟测试入口（新增）
+
+```bash
+export MCD_MCP_TOKEN="你的Token"
+python -m burger_quest smoke            # 真实服务：连接→工具发现→时间→门店→菜单→详情→算价
+python -m burger_quest smoke --demo     # 离线演示（无需 Token，可重复执行，CI 友好）
+python -m burger_quest smoke --store-code 1420762 --json result.json
+```
+
+- 八步只读检查，逐步输出 PASS/FAIL；退出码 0=全过 / 1=有失败 / 2=配置错误；
+- Token 只从环境变量读，**绝不打印**、不接受命令行参数；
+- 末尾「安全自检」断言全过程只调用了只读工具（写操作工具入账即判失败）；
+- 实测（2026-10-14，SDK 2.3.0 + 真实 Token）：**8/8 通过**——35 工具全发现、
+  5 家候选门店、110 个菜单编码、`9900016076 -> "我就喜欢"鸡薯双全盒 ¥15.90`；
+- Mock 测试同步覆盖：全通过 / 某步失败 / 无门店时下游不编造 / 仅只读红线 / 连接失败 / 缺 Token。
+
+### 端到端复测（2026-10-14，SDK 2.3.0）
+
+`quest "我想吃辣，预算30，在深圳市南山区科技园，一个人，到店自取" --store-code 1420762`
+→ 110 个菜单编码 → 10 个详情 → 10 个真实价格 → 「龙焰鸡腿堡 ¥24.00，剩 ¥6.00」，
+160 条营养数据，0 张券如实说明。SDK 升级未破坏任何链路。
+
 ## 4. 业务价值
 
 1. **把「查菜单」变成「做决策」**：MCP 提供数据，Burger Quest 提供决策——预算约束下的多组合对比、优惠券叠加验算、营养偏好筛选，直接给出可执行方案；

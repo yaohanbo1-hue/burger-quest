@@ -9,12 +9,19 @@
 - 测试友好：_check_sdk 与 _open_session 可在实例上替换，从而在无网络/无 SDK 的
   环境下用假会话验证完整调用链。
 
-SDK 版本兼容（实测 mcp 1.27.2，2026-10-13 联调发现并处理）：
+SDK 版本兼容（实测 mcp 1.27.2 / 2.3.0，2026-10-13 联调发现并处理）：
 1. 导出名：旧版 streamablehttp_client，新版 streamable_http_client（_import_stream_client 双兼容）；
 2. 请求头：旧版工厂直接收 headers=，新版只收 http_client=（需自建 httpx2.AsyncClient）；
 3. transport yield：旧版 (read, write, get_session_id)，新版 (read, write)；
-4. HTTP 状态码：新版 SDK 把 401/429 包装成 JSON-RPC MCPError 且不暴露状态码，
+4. list_tools 返回：1.x 是裸 list，2.x 是 ListToolsResult（.tools 属性）——list_tools 双兼容；
+5. HTTP 状态码：新版 SDK 把 401/429 包装成 JSON-RPC MCPError 且不暴露状态码，
    因此自建 http_client 时挂 event hook 记录最近状态码，用于还原 401/429 语义。
+
+错误通道（两条都不能漏，2026-10-13 阶段 5 实测确认）：
+- 业务错误：服务端把错误放在文本信封 success=false 里 -> check_envelope 转 MCPError；
+- 协议错误：SDK/协议层 isError=True（如未知工具名的部分形态）/ JSON-RPC 异常
+  -> _raise_if_protocol_error / _submit 异常映射转 MCPError。
+两条通道都不允许「未知格式猜一个值」后静默放过。
 
 安全约定：
 - Token 只从环境变量 MCD_MCP_TOKEN 或调用方显式传入，绝不落库、绝不写日志；
@@ -100,6 +107,29 @@ def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -
     if any(k in low for k in ("connect", "ssl", "network", "timed out", "unreachable", "resolve")):
         return MCPError(tool, f"MCP 连接失败：{msg}；请检查网络能否访问 https://mcp.mcd.cn")
     return MCPError(tool, f"MCP 调用失败：{msg}")
+
+
+def _protocol_error_text(result) -> Optional[str]:
+    """提取 MCP 协议级错误文本（isError/is_error=True 时）；非错误返回 None。
+
+    属性名兼容：1.x 用 isError，2.x 用 is_error（pydantic 模型字段）。
+    """
+    flag = getattr(result, "is_error", None)
+    if flag is None:
+        flag = getattr(result, "isError", None)
+    if not flag:
+        return None
+    content = getattr(result, "content", None)
+    if isinstance(content, list) and content:
+        first = content[0]
+        text = getattr(first, "text", None)
+        if text is None and isinstance(first, dict):
+            text = first.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    return ""
 
 
 class HttpMCPClient(MCPClient):
@@ -270,7 +300,11 @@ class HttpMCPClient(MCPClient):
             raise self._map_error(tool, e) from e
 
     def _call(self, tool: str, arguments: dict):
-        """调用工具并做信封校验：success=false 的业务错误会转成 MCPError。"""
+        """调用工具并做两级校验：协议级 isError -> 信封 success=false。
+
+        两级都不允许静默放过：错误一律转成带原因的 MCPError，
+        绝不允许「未知格式猜一个值」后继续往下走。
+        """
         if self._session is None:
             raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
 
@@ -278,8 +312,44 @@ class HttpMCPClient(MCPClient):
             return await self._session.call_tool(tool, arguments)
 
         result = self._submit(_invoke(), tool=tool)
+        protocol_error = _protocol_error_text(result)
+        if protocol_error is not None:
+            self._record(tool, arguments, False, note="isError")
+            raise MCPError(
+                tool,
+                f"MCP 协议错误（isError）：{protocol_error or '服务端拒绝了该调用'}",
+            )
         self._record(tool, arguments, True)
         return check_envelope(tool, parse_tool_text(result))
+
+    def list_tools(self) -> list[dict]:
+        """工具发现（只读）：返回 [{name, description, input_schema}]。
+
+        SDK 1.x 的 list_tools() 返回裸 list；2.x 返回 ListToolsResult（.tools）。
+        冒烟测试用它核对「项目依赖的工具仍在官方工具清单里」。
+        """
+        if self._session is None:
+            raise MCPError("list_tools", "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
+
+        async def _invoke():
+            return await self._session.list_tools()
+
+        result = self._submit(_invoke(), tool="list_tools")
+        self._record("list_tools", {}, True)
+        tools = getattr(result, "tools", None)
+        if tools is None and isinstance(result, (list, tuple)):
+            tools = list(result)
+        out = []
+        for t in tools or []:
+            schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)
+            out.append(
+                {
+                    "name": str(getattr(t, "name", "") or ""),
+                    "description": str(getattr(t, "description", "") or ""),
+                    "input_schema": schema,
+                }
+            )
+        return out
 
     # -- 工具封装（参数名与 orderType/beType 组合均为 2026-10-13 联调实测） --
 

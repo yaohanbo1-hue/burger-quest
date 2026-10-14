@@ -13,6 +13,9 @@ description: 麦门异世界 Burger Quest —— 基于麦当劳中国官方 MCP
 1. 确认 `mcd-mcp` 连接器已启用（配置模板见仓库 `mcp-config.example.json`）。
    - 未启用：提示用户到 WorkBuddy【连接器】中启用 `mcd-mcp`，并说明需要 MCP Token（https://open.mcd.cn/mcp 申请）。
 2. 若用户消息里没有麦当劳 MCP 相关工具可用，**不要凭记忆编造菜单/价格**，直接说明原因并停止。
+3. 连接器疑似异常时（工具列表为空、调用全部失败）：建议用户先用仓库自带的只读冒烟测试定位——
+   `python -m burger_quest smoke`（真实模式，八步只读检查）或 `python -m burger_quest smoke --demo`（离线）。
+   冒烟测试不调用任何写操作，Token 只从环境变量读取。
 
 ## 1. 解析冒险者需求（nlparser 规则）
 

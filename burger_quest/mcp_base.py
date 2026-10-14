@@ -207,6 +207,13 @@ class MCPClient(ABC):
         """now-time-info -> {'datetime': ..., 'time_period': ...}"""
 
     @abstractmethod
+    def list_tools(self) -> list[dict]:
+        """工具发现（只读）-> [{'name', 'description', 'input_schema'}]。
+
+        冒烟测试用它核对官方工具清单；Mock 返回演示版清单（无官方 Schema）。
+        """
+
+    @abstractmethod
     def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1) -> list[Store]:
         """query-nearby-stores（searchType=2 按位置）-> 附近门店列表"""
 
@@ -243,6 +250,9 @@ class MCPClient(ABC):
         """calculate-price -> 权威价格计算（金额单位为分）"""
 
     # -- 数据来源描述 -------------------------------------------------------
+
+    def connect(self):
+        """建立会话（Mock/离线客户端为无操作；真实客户端建立 MCP 会话）。"""
 
     def close(self):
         """释放客户端资源（Mock 为无操作；真实客户端关闭 MCP 会话与后台线程）。"""

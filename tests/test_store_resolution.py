@@ -9,7 +9,7 @@
 """
 import pytest
 
-from burger_quest.mcp_base import MCPClient, MCPError
+from burger_quest.mcp_base import TOOLS_USED, MCPClient, MCPError
 from burger_quest.mcp_mock import MockMCPClient
 from burger_quest.models import MenuItem, PriceQuote, Store
 from burger_quest.service import run_quest
@@ -45,6 +45,10 @@ class StubLiveClient(MCPClient):
 
     def now_time(self):
         return {"datetime": "2026-10-13 20:00:00", "time_period": "dinner"}
+
+    def list_tools(self):
+        self.calls.append(("list_tools",))
+        return [{"name": t, "description": "", "input_schema": None} for t in TOOLS_USED]
 
     def nearby_stores(self, keyword, city="", be_type=1):
         self.calls.append(("query-nearby-stores", keyword, city, be_type))

@@ -66,10 +66,23 @@ python -m burger_quest stores "南山科技园" --demo               # 门店查
 6. **文档去魅**：README/MCP_INTEGRATION/skill.md/demo.md 移除 DEMO-001 真实模式误导；`query-meal-detail` 转为「已接入」；MCP_INTEGRATION.md 增加 §3.5 联调实测记录与 §3.6 仍未验证项；README 增加「已知限制」；
 7. **测试扩充**：30 → 99 个（真实客户端同步门面与错误映射、联调格式适配器、门店与外送流程、CLI 全流程；修复一个空断言测试）。
 
+## 5.6 MCP 集成专项复查记录（阶段 5，2026-10-14）
+
+用户要求「专门审查并完善麦当劳 MCP 集成」，本轮完成：
+
+1. **调用链审计**：`cli/service → MCPClient(同步接口) → HttpMCPClient(同步门面 + 后台事件循环线程) → 官方 mcp SDK ClientSession.call_tool → mcp_base.adapt_* 归一化`；代码审计确认无任何裸 HTTP 自研协议（唯一 `httpx2` import 是给官方 SDK 工厂构造 AsyncClient 传 Authorization）；
+2. **SDK 版本漂移复核**：实测环境 SDK 已从 1.27.2 升到 **2.3.0**——逐项复核兼容层（导出名/工厂签名/transport 元组/call_tool 位置参数全部仍匹配），新发现并处理 `list_tools()` 返回 `ListToolsResult` 模型（1.x 是裸 list）；
+3. **工具发现实测**：经项目客户端用真实 Token `list_tools` 发现官方 **35 个工具**，项目使用的 8 个全部在列；逐个核对官方输入 Schema 与代码传参一致（`code` 参数名、`items[].productCode/quantity/couponId`、`beType+searchType` 组合）；另发现官方 Schema 约定「到店自提场景传 beCode 会报错」，客户端按空 beCode 不传已规避；
+4. **错误通道补缺**：新增 `_call()` 协议级 `is_error/isError` 检查——业务错误（信封 success=false）与协议错误两条通道都转可读 MCPError 并记审计，绝不让未知形态静默流入适配器；实测无效门店编码 `DEMO-001` 被服务端明确拒绝（「storeCode门店编码必须全部由数字组成」）；
+5. **只读冒烟测试入口**（新增 `burger_quest/smoke.py` + `burger-quest smoke` 子命令）：连接 → 工具发现 → now-time-info → query-nearby-stores → query-meals → query-meal-detail → calculate-price → 安全自检（仅只读工具）八步；Token 只从环境变量读、绝不打印、不接受命令行参数；退出码 0/1/2；`--demo` 离线可重复执行；真实实测 8/8 通过（35 工具 / 5 家候选门店 / 110 编码 / 鸡薯双全盒 ¥15.90）；
+6. **测试扩充**：99 → **126 个**（isError 协议错误、非 JSON 文本、空 content、字符串 content、价格为字符串/小数的单位防御、缺总价不出方案、envelope 无 data 键、success=false 无 message、错误类型字段丢弃不编造、list_tools 两种 SDK 形态、营养文本坏行跳过；冒烟测试 9 个用例：全通过/某步失败/无门店不编造/仅只读红线/连接失败/缺 Token/离线 demo/CLI 接线/JSON 输出）；
+7. **端到端复测**（SDK 2.3.0 + 真实 Token）：`quest ... --store-code 1420762` → 110 编码 → 10 详情 → 10 价格 →「龙焰鸡腿堡 ¥24.00，剩 ¥6.00」，160 条营养，0 券如实说明，无回归；
+8. **阻塞项不变**（已在 MCP_INTEGRATION.md §3.6 登记）：优惠券字段与金额单位（账户无券）、外送全链路（账户无地址）、套餐换选/特制选项。
+
 ## 6. 交付物清单
 
-- 引擎源码 `burger_quest/`（models / nlparser / mcp_base / mcp_http / mcp_mock / planner / rpg / cards / service / cli，共 11 个模块）
-- 测试 `tests/`（99 个用例：解析、规划铁律、真实客户端同步门面与错误映射、联调格式适配器、门店与外送流程、CLI 全流程、卡片安全、故障路径）
+- 引擎源码 `burger_quest/`（models / nlparser / mcp_base / mcp_http / mcp_mock / planner / rpg / cards / service / smoke / cli，共 12 个模块）
+- 测试 `tests/`（126 个用例：解析、规划铁律、真实客户端同步门面与错误映射、协议级 isError、非法返回结构、联调格式适配器、门店与外送流程、CLI 全流程、只读冒烟测试、卡片安全、故障路径）
 - 文档：README.md、MCP_INTEGRATION.md、skill.md、examples/demo.md
 - 比赛必交：CONTEST_DECLARATION.md（官方原文）、mcp-config.example.json（仅占位符）、workbuddy.md（本文件）
 - 示例：examples/cards/ 三张演示成就卡（HTML/Markdown/JSON）
