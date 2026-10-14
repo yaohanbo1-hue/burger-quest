@@ -72,6 +72,7 @@ class MockMCPClient(MCPClient):
     # -- 工具实现（与真实 MCP 返回结构对齐） ---------------------------------
 
     def now_time(self) -> dict:
+        self._record("now-time-info", {}, True, purpose="time_context")
         return adapt_time(self.data.get("now_time_info", {}))
 
     def list_tools(self) -> list[dict]:
@@ -184,13 +185,14 @@ class MockMCPClient(MCPClient):
             )
         return adapt_nutrition("\n".join(lines))
 
-    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list):
+    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list, purpose: str = ""):
         """演示算价：逻辑与真实工具对齐（金额单位：分；券挂在第一件商品上）。"""
         payload = build_calc_payload(scene, items, coupon_ids)
         self._record(
             "calculate-price",
             {**payload, "storeCode": scene.store_code, "orderType": scene.order_type, "beType": scene.be_type},
             True,
+            purpose=purpose or "price_check",
         )
         original = 0
         per_item: dict[str, int] = {}

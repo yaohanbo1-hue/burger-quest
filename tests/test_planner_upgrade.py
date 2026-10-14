@@ -36,7 +36,10 @@ def item(code, name, price_cents, category="", tags=()):
 
 
 class ScriptedPrice:
-    """按 (餐品编码元组, 券ID元组) 脚本返回权威报价；未脚本化返回 default。"""
+    """按 (餐品编码元组, 券ID元组) 脚本返回权威报价；未脚本化返回 default。
+
+    券 ID 顺序不敏感（提交顺序不影响语义）。
+    """
 
     def __init__(self, quotes=None, default_ok=True, default_total=None):
         self.quotes = quotes or {}
@@ -45,7 +48,7 @@ class ScriptedPrice:
         self.calls = []
 
     def __call__(self, items, coupon_ids):
-        key = (tuple(pi.item.code for pi in items), tuple(coupon_ids))
+        key = (tuple(pi.item.code for pi in items), tuple(sorted(coupon_ids)))
         self.calls.append(key)
         if key in self.quotes:
             return self.quotes[key]

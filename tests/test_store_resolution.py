@@ -5,8 +5,11 @@
   delivery-query-addresses -> delivery-query-stores 拿 beCode；
 - 多候选门店全部列出，不编造、不默默选择；
 - 真实模式没有位置信息 -> 明确要求补充，不发起任何调用；
-- 菜单只有编码；名称来自 query-meal-detail；价格只来自 calculate-price（分）。
+- 菜单只有编码；名称优先取自行算价的 productList（2026-10-14 效率优化），
+  productList 缺名称时才回退 query-meal-detail；价格只来自 calculate-price（分）。
 """
+import dataclasses
+
 import pytest
 
 from burger_quest.mcp_base import TOOLS_USED, MCPClient, MCPError
@@ -88,7 +91,7 @@ class StubLiveClient(MCPClient):
     def list_nutrition_foods(self):
         return []
 
-    def calculate_price(self, scene, items, coupon_ids):
+    def calculate_price(self, scene, items, coupon_ids, purpose=""):
         self.calls.append(("calculate-price", tuple(pi.item.code for pi in items)))
         original = sum(STUB_DETAILS[pi.item.code]["price_cents"] * pi.qty for pi in items)
         fee = 900 if scene.order_type == 2 else 0
@@ -168,7 +171,11 @@ def test_real_mode_empty_menu_for_valid_store():
 
 
 def test_real_mode_single_store_full_flow():
-    """完整官方工具链：附近门店 -> 菜单骨架 -> 餐品详情 -> 价格发现 -> 组合验价。"""
+    """完整官方工具链：附近门店 -> 菜单骨架 -> 算价探测（名称+单价）-> 组合验价。
+
+    2026-10-14 效率优化后：名称与单价来自同一次 calculate-price 的 productList
+    （官方权威返回），query-meal-detail 只在 productList 缺名称时回退调用。
+    """
     client = StubLiveClient(
         stores=[Store(code="A-1", name="麦当劳（甲店）")],
         menus={"A-1": list(STUB_SKELETON)},
@@ -181,11 +188,13 @@ def test_real_mode_single_store_full_flow():
     tools = [c[0] for c in client.calls]
     assert "query-nearby-stores" in tools
     assert "query-meals" in tools
-    assert "query-meal-detail" in tools
     assert "calculate-price" in tools
-    # 价格发现：一次调用传入全部短名单商品
+    # 价格发现：一次调用传入全部短名单商品（拿名称+单价）
     discovery = [c for c in client.calls if c[0] == "calculate-price"]
     assert any(len(c[1]) == len(STUB_SKELETON) for c in discovery)
+    # 名称来自 productList（Stub 的算价返回自带 productName）-> 无需详情调用
+    assert "query-meal-detail" not in tools
+    assert r.chosen.items and all(pi.item.name for pi in r.chosen.items)
 
 
 def test_explicit_store_code_queries_menu_once():
@@ -196,14 +205,48 @@ def test_explicit_store_code_queries_menu_once():
     assert len(meal_calls) == 1  # 恰好一次
 
 
-def test_menu_without_names_stops():
-    """详情全部拿不到名称 -> 停止，不编造餐品名。"""
+def test_detail_fallback_when_product_list_has_no_names():
+    """productList 不含名称时，回退 query-meal-detail 补名（不猜名称）。"""
 
-    class NoDetailClient(StubLiveClient):
+    class NoNamePriceClient(StubLiveClient):
+        def calculate_price(self, scene, items, coupon_ids, purpose=""):
+            quote = super().calculate_price(scene, items, coupon_ids, purpose=purpose)
+            # 抹掉 productList 里的名称，迫使服务层回退查详情
+            return dataclasses.replace(
+                quote,
+                raw={**quote.raw, "productList": [
+                    {k: v for k, v in e.items() if k != "productName"} for e in quote.raw.get("productList", [])
+                ]},
+            )
+
+    client = NoNamePriceClient(
+        stores=[Store(code="A-1", name="麦当劳（甲店）")],
+        menus={"A-1": list(STUB_SKELETON)},
+    )
+    r = run_quest("在测试路吃，到店自取，预算50，想吃辣", client)
+    assert r.chosen is not None
+    tools = [c[0] for c in client.calls]
+    assert "query-meal-detail" in tools  # 回退发生了
+    assert all(pi.item.name for pi in r.chosen.items)
+
+
+def test_menu_without_names_stops():
+    """算价不返名称且详情全部失败 -> 停止，不编造餐品名。"""
+
+    class NoNameNoDetailClient(StubLiveClient):
+        def calculate_price(self, scene, items, coupon_ids, purpose=""):
+            quote = super().calculate_price(scene, items, coupon_ids, purpose=purpose)
+            return dataclasses.replace(
+                quote,
+                raw={**quote.raw, "productList": [
+                    {k: v for k, v in e.items() if k != "productName"} for e in quote.raw.get("productList", [])
+                ]},
+            )
+
         def meal_detail(self, scene, code):
             raise MCPError("query-meal-detail", "详情服务不可用")
 
-    client = NoDetailClient(stores=[Store(code="A-1", name="甲店")], menus={"A-1": list(STUB_SKELETON)})
+    client = NoNameNoDetailClient(stores=[Store(code="A-1", name="甲店")], menus={"A-1": list(STUB_SKELETON)})
     r = run_quest("在测试路吃，到店自取，预算50", client)
     assert r.chosen is None
     assert any("餐品名称" in w for w in r.warnings)

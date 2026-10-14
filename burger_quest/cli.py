@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .mcp_base import MCPError, TOOLS_RESERVED, TOOLS_USED
+from .mcp_base import MCPError, TOOLS_RESERVED, TOOLS_USED, summarize_calls
 from .models import format_yuan
 from .service import run_quest
 
@@ -98,6 +98,16 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
             if isinstance(v, dict):
                 v = json.dumps(v, ensure_ascii=False)
             print(f"  - {k}: {v}")
+    if result.mcp_calls:
+        summary = summarize_calls(result.mcp_calls)
+        by_tool = "、".join(f"{t}×{n}" for t, n in summary["by_tool"].items())
+        print(
+            f"\n【MCP 调用审计】真实请求 {summary['total_calls']} 次"
+            f"（去重命中 {summary['dedup_hits']} 次，失败 {summary['failed']} 次，"
+            f"总耗时 {summary['total_duration_ms']:.0f} ms）"
+        )
+        if by_tool:
+            print(f"  分工具：{by_tool}")
     if card_html and result.card_html:
         card_html.parent.mkdir(parents=True, exist_ok=True)
         card_html.write_text(result.card_html, encoding="utf-8")
@@ -136,6 +146,7 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
             ],
             "warnings": result.warnings,
             "data_sources": result.data_sources,
+            "mcp_calls_summary": summarize_calls(result.mcp_calls) if result.mcp_calls else None,
         }
         json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

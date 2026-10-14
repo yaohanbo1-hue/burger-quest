@@ -235,33 +235,18 @@ def run_quest(
         result.warnings.append("当前门店未返回可售餐品，无法生成方案")
         return result
 
-    # 4. 短名单 + 餐品详情（拿名称）
+    # 4. 短名单 + 价格发现（一次算价同时拿「名称 + 单价」——2026-10-14 效率优化）
+    # 原来：先逐个 query-meal-detail 拿名称（≤10 次），再算价（1 次）。
+    # 现在：先对短名单算价（1 次），calculate-price 的 productList 自带 productName
+    # 与 subtotal（官方权威返回），只有 productList 没给名称的商品才回退查详情
+    # （实测通常 0 次）。总调用从 ≤11 次降到 1-3 次，且名称/价格仍全部来自官方。
     shortlist = _shortlist(skeleton, c)
-    named: list[MenuItem] = []
-    detail_failures = 0
-    for m in shortlist:
-        try:
-            detail = client.meal_detail(scene, m.code)
-        except MCPError:
-            detail_failures += 1
-            continue
-        name = detail.get("name") or ""
-        if not name:
-            continue
-        named.append(
-            MenuItem(code=m.code, name=name, category=m.category, price_cents=None, tags=m.tags)
-        )
-    if detail_failures:
-        result.warnings.append(f"{detail_failures} 个餐品详情查询失败，已跳过")
-    if not named:
-        result.warnings.append("未能获取任何餐品名称，无法生成方案（未编造任何餐品）")
-        return result
-
-    # 5. 价格发现：一次算价拿全部短名单商品的真实单价（分）
     try:
-        probe = client.calculate_price(scene, [PlanItem(m, 1) for m in named], [])
+        probe = client.calculate_price(scene, [PlanItem(m, 1) for m in shortlist], [], purpose="price_discovery")
     except MCPError as e:
-        result.warnings.append(f"价格查询失败：{e}；没有权威价格就无法生成方案（未编造任何价格）")
+        result.warnings.append(
+            f"价格查询失败：{e}；没有权威价格就无法生成方案（未编造任何价格）"
+        )
         return result
     if not probe.ok:
         result.warnings.append(
@@ -270,6 +255,38 @@ def run_quest(
         return result
     unit_prices = extract_product_prices(probe)
     price_names = extract_product_names(probe)
+
+    named: list[MenuItem] = []
+    detail_failures = 0
+    detail_skipped = 0
+    for m in shortlist:
+        name = price_names.get(m.code) or ""
+        if not name:
+            # productList 没给名称：回退 query-meal-detail（不猜名称）
+            try:
+                detail = client.meal_detail(scene, m.code)
+            except MCPError:
+                detail_failures += 1
+                continue
+            name = detail.get("name") or ""
+        else:
+            detail_skipped += 1
+        if not name:
+            continue
+        named.append(
+            MenuItem(code=m.code, name=name, category=m.category, price_cents=None, tags=m.tags)
+        )
+    if detail_failures:
+        result.warnings.append(f"{detail_failures} 个餐品详情查询失败，已跳过")
+    if detail_skipped:
+        result.warnings.append(
+            f"{detail_skipped} 个餐品名称直接取自行算价返回（productList.productName），省下 {detail_skipped} 次详情查询"
+        )
+    if not named:
+        result.warnings.append("未能获取任何餐品名称，无法生成方案（未编造任何餐品）")
+        return result
+
+    # 5. 价格汇总：单品实付来自同一次算价的 productList.subtotal（权威，非估算）
     priced: list[MenuItem] = []
     unpriced = 0
     for m in named:
@@ -314,7 +331,7 @@ def run_quest(
 
     def price_fn(items, coupon_ids) -> PriceQuote:
         try:
-            return client.calculate_price(scene, items, coupon_ids)
+            return client.calculate_price(scene, items, coupon_ids, purpose="plan_verification")
         except MCPError as e:
             price_failures.append(str(e))
             return PriceQuote(ok=False, message=str(e))

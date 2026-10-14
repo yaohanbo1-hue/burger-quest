@@ -14,7 +14,7 @@ class BrokenMenuClient(MockMCPClient):
 class BrokenPriceClient(MockMCPClient):
     """calculate-price 直接失败的客户端。"""
 
-    def calculate_price(self, scene, items, coupon_ids):
+    def calculate_price(self, scene, items, coupon_ids, purpose=""):
         raise MCPError("calculate-price", "模拟价格服务不可用", code=429)
 
 

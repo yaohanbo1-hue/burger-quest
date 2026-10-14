@@ -356,22 +356,22 @@ def coupon_applies(coupon: Coupon, combo: list[PlanItem], estimated_original: in
 
 
 def coupon_sets(combo: list[PlanItem], coupons: list[Coupon], estimated_original: int) -> list[list[Coupon]]:
-    """生成待验价的优惠券组合：无券 + 每个可用单券 + 前若干可用券的两两组合。
+    """生成待验价的优惠券试探序列：最优单券 -> 最优双券（无可用券时只有无券）。
 
-    注意：任何多券组合只是「试探」——是否真的可叠加由 calculate-price
-    权威核验决定，引擎不默认优惠可叠加（见 coupon_expected_discount /
-    coupon_note）；权威折扣与预期不符时如实备注，仍按权威结果计价。
+    2026-10-14 效率优化（每个组合最多 3 次算价，原来最多 8 次）：
+    - 有可用券时不再无条件先探「无券基线」——同餐品下无券方案严格被
+      叠券方案支配（更贵），先探券；
+    - 取预期折扣最高的券优先试探；是否真的可叠加由 calculate-price
+      权威核验决定，引擎不默认优惠可叠加（见 coupon_expected_discount /
+      coupon_note）；全部券试探失败时由调用方回退无券核验。
     """
     applicable = [c for c in coupons if coupon_applies(c, combo, estimated_original)]
-    sets: list[list[Coupon]] = [[]]
-    for c in applicable[:4]:
-        sets.append([c])
-    # 两两组合（含同源券）：前 3 张可用券的全部 pairs，共 3 组，控制调用次数
-    top = applicable[:3]
-    for i in range(len(top)):
-        for j in range(i + 1, len(top)):
-            if top[i].id != top[j].id:
-                sets.append([top[i], top[j]])
+    if not applicable:
+        return [[]]
+    applicable.sort(key=lambda c: (-coupon_expected_discount(c, combo, estimated_original), c.id))
+    sets: list[list[Coupon]] = [[applicable[0]]]
+    if len(applicable) >= 2:
+        sets.append([applicable[0], applicable[1]])
     return sets
 
 
@@ -391,6 +391,55 @@ def coupon_expected_discount(coupon: Coupon, combo: list[PlanItem], estimated_or
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
+
+
+def _make_option(
+    combo: list[PlanItem],
+    cset: list,
+    quote: PriceQuote,
+    c: Constraints,
+    estimated: int,
+    nutrition: list,
+    totals: dict,
+    complete: bool,
+    missing: list,
+) -> PlanOption:
+    """把一次权威核验结果组装成方案（总价只认 quote；优惠效力如实核验）。"""
+    opt = PlanOption(
+        title="",
+        items=list(combo),
+        coupons=list(cset),
+        total_cents=quote.total_cents,
+        original_cents=quote.original_cents,
+        discount_cents=quote.discount_cents,
+        delivery_fee_cents=quote.delivery_fee_cents,
+        price_checked=True,
+        nutrition=totals,
+        nutrition_complete=complete,
+        nutrition_missing=list(missing),
+    )
+    if c.budget_cents is not None:
+        opt.within_budget = opt.total_cents <= c.budget_cents
+        opt.remaining_cents = c.budget_cents - opt.total_cents
+    # 优惠核验：预期折扣 vs 权威折扣，不默认可叠加
+    expected = sum(coupon_expected_discount(c2, combo, estimated) for c2 in cset)
+    actual = opt.discount_cents or 0
+    if cset and expected != actual:
+        opt.coupon_note = (
+            f"提交 {len(cset)} 张券，官方核验实际优惠 {format_yuan(actual)}"
+            f"（按券面预估 {format_yuan(expected)}）——不默认优惠可叠加，已按权威结果计价"
+        )
+        if actual == 0:
+            # 权威核验确认优惠未生效：不把这张券算作本方案的优惠
+            opt.coupons = []
+    if c.has_nutrition_preference() and not complete:
+        opt.warnings.append(
+            "营养数据不完整：" + "、".join(missing) + " 无营养记录，蛋白/热量结论可能偏低（未猜测数值）"
+        )
+    opt.reasons = _build_reasons(opt, c, nutrition)
+    opt.unmet = _build_unmet(opt, c)
+    opt.score = _option_score(opt, c, nutrition)
+    return opt
 
 
 def build_plan(
@@ -448,50 +497,24 @@ def build_plan(
             nutrition_excluded += 1
             continue
         best_for_combo: Optional[PlanOption] = None
+        any_verified = False
         for cset in coupon_sets(combo, coupons, estimated):
             quote = price_fn(combo, [c2.id for c2 in cset])
             if not quote.ok or quote.total_cents is None:
                 price_failed += 1
                 continue  # 权威计算失败：该券组合作废，不编造总价
-            opt = PlanOption(
-                title="",
-                items=list(combo),
-                coupons=list(cset),
-                total_cents=quote.total_cents,
-                original_cents=quote.original_cents,
-                discount_cents=quote.discount_cents,
-                delivery_fee_cents=quote.delivery_fee_cents,
-                price_checked=True,
-                nutrition=totals,
-                nutrition_complete=complete,
-                nutrition_missing=list(missing),
-            )
-            # 计算剩余预算与预算符合性（相等算预算内：remaining=0）
-            if c.budget_cents is not None:
-                opt.within_budget = opt.total_cents <= c.budget_cents
-                opt.remaining_cents = c.budget_cents - opt.total_cents
-            # 优惠核验：预期折扣 vs 权威折扣，不默认可叠加
-            expected = sum(coupon_expected_discount(c2, combo, estimated) for c2 in cset)
-            actual = opt.discount_cents or 0
-            if cset and expected != actual:
-                opt.coupon_note = (
-                    f"提交 {len(cset)} 张券，官方核验实际优惠 {format_yuan(actual)}"
-                    f"（按券面预估 {format_yuan(expected)}）——不默认优惠可叠加，已按权威结果计价"
-                )
-            if c.has_nutrition_preference() and not complete:
-                # 部分覆盖：保留但降低可信度（标注 + 降权）
-                opt.warnings.append(
-                    "营养数据不完整："
-                    + "、".join(missing)
-                    + " 无营养记录，蛋白/热量结论可能偏低（未猜测数值）"
-                )
-            opt.reasons = _build_reasons(opt, c, nutrition)
-            opt.unmet = _build_unmet(opt, c)
-            opt.score = _option_score(opt, c, nutrition)
-            # 同分决胜：总价更低者胜（同样餐品同样评分时，省更多的方案优先）
+            any_verified = True
+            opt = _make_option(combo, cset, quote, c, estimated, nutrition, totals, complete, missing)
             rank = (opt.score, -(opt.total_cents or 0))
             if best_for_combo is None or rank > (best_for_combo.score, -(best_for_combo.total_cents or 0)):
                 best_for_combo = opt
+        if not any_verified:
+            # 所有券试探都被权威核验拒绝 -> 回退无券核验（保证有方案可出）
+            quote = price_fn(combo, [])
+            if quote.ok and quote.total_cents is not None:
+                best_for_combo = _make_option(combo, [], quote, c, estimated, nutrition, totals, complete, missing)
+            else:
+                price_failed += 1
         if best_for_combo is not None:
             options.append(best_for_combo)
 

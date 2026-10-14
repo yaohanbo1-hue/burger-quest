@@ -3,10 +3,17 @@
 - MCPClient：引擎唯一依赖的接口。真实实现走官方 mcp Python SDK（mcp_http.py），
   演示/测试走 fixtures（mcp_mock.py）。
 - 适配器（adapt_*）：把 MCP 真实返回规范化为引擎模型。
-- 数据来源审计：每次调用记录到 MCPClient.calls，最终写入任务书的数据来源区块。
+- 数据来源审计：每次调用记录到 MCPClient.calls（工具名/耗时/成功状态/序号/用途），
+  最终写入任务书的数据来源区块。
+
+调用审计字段（2026-10-14 效率优化新增）：
+- seq：调用序号（从 1 开始）；duration_ms：耗时；purpose：用途；
+- ok：成功/失败；attempts：实际尝试次数（含重试）；mcp_call：是否真的发起了
+  MCP 请求（False = 去重/缓存命中，未发起请求）；note：备注。
+- 安全：args 经 _safe_args 脱敏，绝不记录 token/authorization/headers。
 
 ═══════════════════════════════════════════════════════════════
-真实返回格式（2026-10-13 用官方 Token 联调实测，mcp 1.27.2）
+真实返回格式（2026-10-13 用官方 Token 联调实测，mcp 1.27.2 / 2.3.0 复核）
 ═══════════════════════════════════════════════════════════════
 1. 工具返回的是**文本**：前面是大段字段说明，JSON 在 `## Original Response` 之后，
    且 JSON 后面可能还跟着「数据传参规则」等说明文字。
@@ -73,6 +80,51 @@ TOOLS_RESERVED = [
     "cancel-order",
     "query-order",
 ]
+
+# 工具 -> 调用用途（审计与调用次数分析用；calculate-price 的用途由调用方细化）
+TOOL_PURPOSE = {
+    "now-time-info": "time_context",
+    "query-nearby-stores": "store_resolution",
+    "delivery-query-addresses": "store_resolution",
+    "delivery-query-stores": "store_resolution",
+    "query-meals": "menu_skeleton",
+    "query-meal-detail": "meal_name",
+    "query-store-coupons": "coupon_pool",
+    "query-my-coupons": "coupon_pool",
+    "list-nutrition-foods": "nutrition",
+    "calculate-price": "price_check",
+    "list_tools": "tool_discovery",
+}
+
+# 可短 TTL 缓存的只读工具 -> TTL 秒数（2026-10-14 效率优化）。
+# 硬性排除：优惠券（券池/有效性实时变）、calculate-price（必须按当前方案实时核验）、
+# 库存类信息——绝不把旧结果当实时结果。
+CACHEABLE_TTL = {
+    "now-time-info": 30.0,
+    "query-nearby-stores": 120.0,
+    "delivery-query-addresses": 60.0,
+    "delivery-query-stores": 120.0,
+    "query-meals": 300.0,
+    "query-meal-detail": 300.0,
+    "list-nutrition-foods": 600.0,
+}
+
+
+def summarize_calls(calls: list) -> dict:
+    """调用审计摘要：真实请求数、去重命中数、失败数、总耗时、分工具计数。"""
+    real = [c for c in calls if isinstance(c, dict) and c.get("mcp_call", True)]
+    dedup = [c for c in calls if isinstance(c, dict) and not c.get("mcp_call", True)]
+    by_tool: dict[str, int] = {}
+    for c in real:
+        by_tool[c.get("tool", "?")] = by_tool.get(c.get("tool", "?"), 0) + 1
+    durations = [c.get("duration_ms") or 0.0 for c in real]
+    return {
+        "total_calls": len(real),
+        "dedup_hits": len(dedup),
+        "failed": sum(1 for c in real if c.get("ok") is False),
+        "total_duration_ms": round(sum(durations), 1),
+        "by_tool": by_tool,
+    }
 
 
 class MCPError(Exception):
@@ -195,10 +247,35 @@ class MCPClient(ABC):
     """
 
     def __init__(self):
-        self.calls: list[dict] = []  # 审计记录
+        self.calls: list[dict] = []  # 审计记录（见模块 docstring 的字段说明）
+        self._seq = 0
 
-    def _record(self, tool: str, args: dict, ok: bool, note: str = ""):
-        self.calls.append({"tool": tool, "args": _safe_args(args), "ok": ok, "note": note})
+    def _record(
+        self,
+        tool: str,
+        args: dict,
+        ok: bool,
+        note: str = "",
+        duration_ms: Optional[float] = None,
+        purpose: str = "",
+        attempts: int = 1,
+        mcp_call: bool = True,
+    ):
+        """记录一次调用（或一次去重命中）。绝不记录 token/authorization/headers。"""
+        self._seq += 1
+        self.calls.append(
+            {
+                "seq": self._seq,
+                "tool": tool,
+                "args": _safe_args(args),
+                "ok": ok,
+                "note": note,
+                "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
+                "purpose": purpose or TOOL_PURPOSE.get(tool, ""),
+                "attempts": attempts,
+                "mcp_call": mcp_call,
+            }
+        )
 
     # -- 基础信息 -----------------------------------------------------------
 
@@ -246,8 +323,12 @@ class MCPClient(ABC):
         """list-nutrition-foods -> 常见餐品营养数据"""
 
     @abstractmethod
-    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list) -> PriceQuote:
-        """calculate-price -> 权威价格计算（金额单位为分）"""
+    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list, purpose: str = "") -> PriceQuote:
+        """calculate-price -> 权威价格计算（金额单位为分）。
+
+        purpose: price_discovery=短名单价格发现 | plan_verification=组合验价。
+        本工具绝不缓存——每次都必须按当前方案实时核验。
+        """
 
     # -- 数据来源描述 -------------------------------------------------------
 

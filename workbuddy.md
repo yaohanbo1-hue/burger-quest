@@ -112,3 +112,18 @@ python -m burger_quest stores "南山科技园" --demo               # 门店查
 - 所有输出含非官方项目声明。
 
 _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
+
+## 5.8 MCP 调用效率与可靠性优化（2026-10-14）
+
+先测基线再优化（用户明确要求不许凭猜测重构）：
+
+1. **基线实测**（tools/measure_calls.py，插桩包装客户端方法）：演示模式 24 次/任务；真实模式 17 次/3.5s。拆解发现 query-meal-detail 10 次占真实耗时 ~50%，组合验价券试探最多 8 次/组合；
+2. **调用插桩**（mcp_base._record）：seq/duration_ms/purpose/attempts/mcp_call 五字段；args 经 _safe_args 脱敏（无 token/authorization）；summarize_calls() 汇总；CLI 输出末尾新增【MCP 调用审计】，--json 增加 mcp_calls_summary；
+3. **去重与缓存**：HttpMCPClient._call 内置 TTL 缓存（CACHEABLE_TTL：时间 30s/门店 2min/菜单详情 5min/营养 10min）；**算价与优惠券硬性排除**；失败不进缓存；
+4. **超时与重试**：分工具超时（默认 30s/算价 45s）；_retry_backoff 决策表——401 不重试、429 最多 2 次（2s/4s 降速）、5xx 与瞬时网络错误最多 3 次（0.5/1/2s）、业务错误与 isError 不重试；_map_sdk_error 增加消息文本 5xx 识别；
+5. **链路削减**：service 算价探测前置——一次 calculate-price 同时拿名称（productList.productName）与单价（subtotal），缺名称才回退 query-meal-detail；planner 券试探封顶（最优单券→最优双券→全失败回退无券；无券基线在同餐品下被叠券方案严格支配故不再无条件探）；
+6. **优化后实测**：演示 11-15 次（最坏 15，-40%）；真实 **7 次/1.8s**（-59%/-43%）；详情 10→0 次；方案质量不变（同场景同权威总价）；
+7. **测试 148 → 173**：新增 tests/test_mcp_efficiency.py 25 个用例（调用上限/详情归零/用途区分/券试探封顶/超时/分工具超时值/瞬时重试成功/持续失败有限次数/401 不重试/429 降速/业务错误不重试/5xx 重试/决策表/去重/TTL 过期/失败不进缓存/算价不缓存/券不缓存/可缓存集合排除/审计字段/脱敏/CLI 审计展示/JSON 摘要/失败不静默/部分工具失败隔离）；
+8. 修复两处流程适配测试（详情回退路径、productList 缺名称场景改为新链路语义）。
+
+## 6. 交付物清单

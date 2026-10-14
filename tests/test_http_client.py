@@ -376,7 +376,7 @@ def test_is_error_response_raises_mcp_error():
     assert "协议错误" in str(ei.value)
     assert "Unknown tool" in str(ei.value)
     # 审计记录必须留下失败痕迹
-    assert any(c["ok"] is False and c.get("note") == "isError" for c in client.calls)
+    assert any(c["ok"] is False and "isError" in (c.get("note") or "") for c in client.calls)
 
 
 def test_is_error_alias_isError_sdk1x():

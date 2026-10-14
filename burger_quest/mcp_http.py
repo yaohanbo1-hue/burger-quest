@@ -9,6 +9,16 @@
 - 测试友好：_check_sdk 与 _open_session 可在实例上替换，从而在无网络/无 SDK 的
   环境下用假会话验证完整调用链。
 
+效率与可靠性（2026-10-14 优化，基线实测后实施）：
+- 分工具超时：默认 30s，calculate-price 45s（最重）；单次调用不会卡死任务；
+- 有限退避重试：瞬时网络错误/5xx 最多 3 次（0.5s/1s/2s），429 最多 2 次（2s/4s，
+  尊重限流并降速），401 不重试（直接提示检查 Token），业务错误（信封 success=false）
+  与协议错误不重试（确定性响应）；
+- 任务内去重 + 短 TTL 只读缓存：now-time-info 30s / 门店 2min / 菜单与详情 5min /
+  营养 10min；优惠券与 calculate-price 绝不缓存（必须实时核验）；
+- 调用审计：seq/duration_ms/purpose/attempts/mcp_call（见 mcp_base._record），
+  绝不记录 Token。
+
 SDK 版本兼容（实测 mcp 1.27.2 / 2.3.0，2026-10-13 联调发现并处理）：
 1. 导出名：旧版 streamablehttp_client，新版 streamable_http_client（_import_stream_client 双兼容）；
 2. 请求头：旧版工厂直接收 headers=，新版只收 http_client=（需自建 httpx2.AsyncClient）；
@@ -32,11 +42,15 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import json
 import os
+import re
 import threading
+import time
 from typing import Optional
 
 from .mcp_base import (
+    CACHEABLE_TTL,
     MCPClient,
     MCPError,
     OrderScene,
@@ -53,7 +67,18 @@ from .mcp_base import (
 )
 
 MCD_MCP_URL = "https://mcp.mcd.cn"
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 30.0  # 默认单次调用超时（基线实测：最慢单次 663ms，30s 充裕）
+TOOL_TIMEOUTS = {"calculate-price": 45.0}  # 算价最重，放宽到 45s
+
+# 重试策略（有限次数，绝不无限重试）
+MAX_ATTEMPTS_NETWORK = 3   # 瞬时网络错误 / 5xx
+MAX_ATTEMPTS_429 = 2       # 限流：少试+长退避，尊重 600 次/分钟
+BACKOFF_NETWORK = (0.5, 1.0, 2.0)   # 第 1/2/3 次尝试前的等待（秒）
+BACKOFF_429 = (2.0, 4.0)
+_NETWORK_HINTS = (
+    "connect", "ssl", "network", "timed out", "timeout", "unreachable", "resolve",
+    "closed abruptly", "incomplete", "reset by peer", "broken pipe", "remote end closed",
+)
 
 
 def _import_stream_client():
@@ -85,7 +110,7 @@ def _import_stream_client():
 
 
 def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -> MCPError:
-    """把 SDK/网络异常翻译成用户可懂的 MCPError（含 401/429 官方错误码语义）。
+    """把 SDK/网络异常翻译成用户可懂的 MCPError（含 401/429/5xx 官方错误码语义）。
 
     http_status：自建 http_client 的 event hook 记录的真实 HTTP 状态码（新版 SDK 会吞掉它）。
     """
@@ -101,6 +126,17 @@ def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -
             tool,
             "触发麦当劳 MCP 限流（429，每 Token 每分钟 600 次）：请稍后重试",
             429,
+        )
+    if http_status is None:
+        # event hook 没拿到状态码时，从消息文本里找 5xx（httpx/SDK 的异常文本通常带码）
+        m = re.search(r"\b(5\d\d)\b", str(e))
+        if m:
+            http_status = int(m.group(1))
+    if http_status is not None and http_status >= 500:
+        return MCPError(
+            tool,
+            f"麦当劳 MCP 服务端错误（HTTP {http_status}）：{e}；请稍后重试",
+            http_status,
         )
     msg = str(e)
     low = msg.lower()
@@ -154,6 +190,9 @@ class HttpMCPClient(MCPClient):
         self._stack = None
         self._http_client = None
         self._http_statuses: list[int] = []  # event hook 记录的 HTTP 状态码（还原 401/429）
+        self._read_cache: dict[str, tuple[float, object]] = {}  # 只读查询短 TTL 缓存
+        self.cache_hits = 0
+        self.cache_misses = 0
 
     # -- 连接管理 -----------------------------------------------------------
 
@@ -166,7 +205,10 @@ class HttpMCPClient(MCPClient):
         return False
 
     def connect(self):
-        """建立 MCP 会话（幂等）。失败抛 MCPError，消息可读，不泄露 Token。"""
+        """建立 MCP 会话（幂等）。失败抛 MCPError，消息可读，不泄露 Token。
+
+        连接阶段的瞬时网络错误允许一次重试（0.5s 退避）；401 不重试。
+        """
         if self._loop is not None:
             return
         self._check_sdk()
@@ -174,7 +216,18 @@ class HttpMCPClient(MCPClient):
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="mcd-mcp-loop")
         self._thread.start()
         try:
-            self._submit(self._open_session())
+            self._submit(self._open_session(), tool="connect")
+        except MCPError as e:
+            # 仅对瞬时网络错误重试一次；认证/协议错误直接失败
+            if e.code in (401, 429) or "超时" in str(e):
+                self.close()
+                raise
+            try:
+                time.sleep(0.5)
+                self._submit(self._open_session(), tool="connect")
+            except BaseException:
+                self.close()
+                raise
         except BaseException:
             self.close()
             raise
@@ -283,44 +336,118 @@ class HttpMCPClient(MCPClient):
         status = self._http_statuses[-1] if self._http_statuses else None
         return _map_sdk_error(tool, e, http_status=status)
 
-    def _submit(self, coro, tool: str = "mcd-mcp"):
+    def _timeout_for(self, tool: str) -> float:
+        return TOOL_TIMEOUTS.get(tool, self.timeout)
+
+    def _submit(self, coro, tool: str = "mcd-mcp", timeout: Optional[float] = None):
         """把协程提交到后台事件循环，同步等待结果；异常一律映射为 MCPError。"""
         if self._loop is None:
             coro.close()
             raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
-            return fut.result(timeout=self.timeout)
+            return fut.result(timeout=timeout if timeout is not None else self.timeout)
         except MCPError:
             raise
         except (TimeoutError, concurrent.futures.TimeoutError) as e:
             fut.cancel()
-            raise MCPError(tool, f"MCP 调用超时（{self.timeout:.0f} 秒无响应）；请检查网络后重试") from e
+            raise MCPError(tool, f"MCP 调用超时（{timeout:.0f} 秒无响应）；请检查网络后重试") from e
         except Exception as e:
             raise self._map_error(tool, e) from e
 
-    def _call(self, tool: str, arguments: dict):
-        """调用工具并做两级校验：协议级 isError -> 信封 success=false。
+    def _retry_backoff(self, tool: str, e: MCPError, attempts: int) -> Optional[float]:
+        """决定是否重试及退避秒数；None = 不重试（直接失败）。
 
-        两级都不允许静默放过：错误一律转成带原因的 MCPError，
+        策略：
+        - 401 认证错误：不重试（提示用户检查 Token）；
+        - 429 限流：最多 2 次尝试，退避 2s/4s（尊重限流、降速）；
+        - 5xx 服务端错误与瞬时网络错误：最多 3 次尝试，退避 0.5s/1s/2s；
+        - 业务错误（信封 success=false）与协议错误（isError）：不重试（确定性响应）。
+        """
+        if e.code == 401:
+            return None
+        if e.code == 429:
+            return BACKOFF_429[attempts - 1] if attempts < MAX_ATTEMPTS_429 else None
+        server_error = e.code is not None and e.code >= 500
+        network_error = any(k in str(e).lower() for k in _NETWORK_HINTS)
+        if (server_error or network_error) and attempts < MAX_ATTEMPTS_NETWORK:
+            return BACKOFF_NETWORK[attempts - 1]
+        return None
+
+    def _invoke_with_retry(self, tool: str, arguments: dict, timeout: float):
+        """带有限退避重试的工具调用。返回 (result, attempts)。"""
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                return (
+                    self._submit(
+                        self._session.call_tool(tool, arguments),
+                        tool=tool,
+                        timeout=timeout,
+                    ),
+                    attempts,
+                )
+            except MCPError as e:
+                backoff = self._retry_backoff(tool, e, attempts)
+                if backoff is None:
+                    if attempts > 1:
+                        e.args = (f"{e.args[0]}（已重试 {attempts - 1} 次均失败）",)
+                    raise
+                time.sleep(backoff)
+
+    def _cache_key(self, tool: str, arguments: dict) -> str:
+        return tool + "|" + json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+
+    def _call(self, tool: str, arguments: dict, purpose: str = ""):
+        """调用工具并做三级处理：TTL 去重 -> 有限重试 -> 信封/协议校验。
+
+        三级都不允许静默放过：错误一律转成带原因的 MCPError，
         绝不允许「未知格式猜一个值」后继续往下走。
         """
         if self._session is None:
             raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
 
-        async def _invoke():
-            return await self._session.call_tool(tool, arguments)
+        # 1) 只读查询去重/短 TTL 缓存（优惠券与算价不在可缓存集合，永远实时）
+        ttl = CACHEABLE_TTL.get(tool)
+        key = self._cache_key(tool, arguments)
+        if ttl:
+            hit = self._read_cache.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < ttl:
+                self.cache_hits += 1
+                self._record(
+                    tool, arguments, True,
+                    note=f"去重命中（TTL {ttl:.0f}s 内未发起请求）",
+                    purpose=purpose, mcp_call=False,
+                )
+                return hit[1]
 
-        result = self._submit(_invoke(), tool=tool)
+        # 2) 实际调用（有限重试）
+        t0 = time.perf_counter()
+        try:
+            result, attempts = self._invoke_with_retry(tool, arguments, self._timeout_for(tool))
+        except MCPError:
+            self._record(tool, arguments, False, note="调用失败", duration_ms=(time.perf_counter() - t0) * 1000,
+                         purpose=purpose)
+            raise
+        duration_ms = (time.perf_counter() - t0) * 1000
+
+        # 3) 协议级错误（isError）—— 不容忍静默流入适配器
         protocol_error = _protocol_error_text(result)
         if protocol_error is not None:
-            self._record(tool, arguments, False, note="isError")
+            self._record(tool, arguments, False, note=f"isError（attempts={attempts}）",
+                         duration_ms=duration_ms, purpose=purpose, attempts=attempts)
             raise MCPError(
                 tool,
                 f"MCP 协议错误（isError）：{protocol_error or '服务端拒绝了该调用'}",
             )
-        self._record(tool, arguments, True)
-        return check_envelope(tool, parse_tool_text(result))
+        data = check_envelope(tool, parse_tool_text(result))
+        # 只缓存成功结果——失败绝不进缓存（不会把失败当成功复用）
+        if ttl:
+            self._read_cache[key] = (time.monotonic(), data)
+            self.cache_misses += 1
+        self._record(tool, arguments, True, duration_ms=duration_ms, purpose=purpose, attempts=attempts)
+        return data
 
     def list_tools(self) -> list[dict]:
         """工具发现（只读）：返回 [{name, description, input_schema}]。
@@ -425,6 +552,7 @@ class HttpMCPClient(MCPClient):
     def list_nutrition_foods(self):
         return adapt_nutrition(self._call("list-nutrition-foods", {}))
 
-    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list):
+    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list, purpose: str = ""):
+        # 算价绝不走缓存：必须按当前方案实时核验（req: 最终总价的真实性）
         payload = build_calc_payload(scene, items, coupon_ids)
-        return adapt_price(self._call("calculate-price", payload))
+        return adapt_price(self._call("calculate-price", payload, purpose=purpose or "price_check"))
