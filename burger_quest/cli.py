@@ -121,6 +121,8 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
             "quest_name": result.quest_name,
             "story": result.story,
             "gear": result.gear_lines,
+            "constraints": c.describe(),
+            "constraints_debug": c.to_debug_dict(),  # 结构化解析结果（默认不含原始输入）
             "options": [
                 {
                     "title": o.title,

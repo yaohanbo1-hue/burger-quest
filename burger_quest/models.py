@@ -135,6 +135,7 @@ class Constraints:
     location: Optional[str] = None
     store_code: Optional[str] = None
     tastes: tuple = ()  # spicy/sweet/crispy/burger/chicken/beef/fish/veggie/soup
+    avoid_tastes: tuple = ()  # 明确不吃的口味（「不吃辣」——避免性约束，优先于正向偏好）
     mood: Optional[str] = None  # happy/sad/tired/night/celebrate/plain
     max_calories: Optional[float] = None
     min_protein_g: Optional[float] = None
@@ -142,6 +143,8 @@ class Constraints:
     prefer_combo: bool = True
     avoid_categories: tuple = ()  # 明确不要的品类（如 ("drink",)——「不要饮料」）
     max_drink_qty: Optional[int] = None  # 饮料数量软上限（「不想点太多饮料」；None=不限制）
+    fuzzy_budget: bool = False  # 预算来自模糊区间（如「二三十元」按上限处理）
+    sources: dict = field(default_factory=dict)  # 约束来源：explicit=用户明确给出 / inferred=系统推断 / default=系统默认
     raw_text: str = ""
     notes: tuple = ()  # 解析过程中的提示（如"未识别到预算"）
 
@@ -149,10 +152,37 @@ class Constraints:
         """用户是否表达了营养偏好（决定营养数据缺失时是否降权/排除候选）。"""
         return self.max_calories is not None or self.min_protein_g is not None
 
+    def to_debug_dict(self, include_raw: bool = False) -> dict:
+        """结构化调试表示（默认不含原始输入，避免不必要地回显用户文本）。"""
+        d = {
+            "budget_cents": self.budget_cents,
+            "fuzzy_budget": self.fuzzy_budget,
+            "people": self.people,
+            "dining_mode": self.dining_mode,
+            "location": self.location,
+            "store_code": self.store_code,
+            "tastes": list(self.tastes),
+            "avoid_tastes": list(self.avoid_tastes),
+            "mood": self.mood,
+            "max_calories": self.max_calories,
+            "min_protein_g": self.min_protein_g,
+            "rich": self.rich,
+            "avoid_categories": list(self.avoid_categories),
+            "max_drink_qty": self.max_drink_qty,
+            "sources": dict(self.sources),
+            "notes": list(self.notes),
+        }
+        if include_raw:
+            d["raw_text"] = self.raw_text
+        else:
+            d["raw_text_length"] = len(self.raw_text)
+        return d
+
     def describe(self) -> str:
         parts = []
         if self.budget_cents is not None:
-            parts.append(f"预算 {format_yuan(self.budget_cents)}")
+            budget = format_yuan(self.budget_cents) + ("（模糊区间上限）" if self.fuzzy_budget else "")
+            parts.append(f"预算 {budget}")
         parts.append(f"{self.people} 人")
         mode_cn = {"delivery": "外送", "takeaway": "到店自取", "dine_in": "堂食"}
         parts.append(mode_cn.get(self.dining_mode, self.dining_mode))
@@ -160,6 +190,8 @@ class Constraints:
             parts.append(f"位置 {self.location}")
         if self.tastes:
             parts.append("口味 " + "/".join(TASTE_CN.get(t, t) for t in self.tastes))
+        if self.avoid_tastes:
+            parts.append("不吃 " + "/".join(TASTE_CN.get(t, t) for t in self.avoid_tastes))
         if self.max_calories:
             parts.append(f"热量 ≤ {self.max_calories:.0f} 千卡")
         if self.min_protein_g:

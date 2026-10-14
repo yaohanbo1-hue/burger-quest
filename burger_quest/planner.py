@@ -289,8 +289,17 @@ def _build_candidates(
     max_candidates: int = 6,
 ) -> list[list[PlanItem]]:
     avoid = set(c.avoid_categories)
-    # 硬避免品类直接出局；价格未知同样出局（见 build_plan 的说明）
-    pool = [m for m in menu if m.price_cents is not None and classify(m) not in avoid]
+    avoid_tastes = set(c.avoid_tastes)
+    # 硬避免品类与口味直接出局；价格未知同样出局（见 build_plan 的说明）
+    # 注意：「不吃辣」是硬约束——任何辣味餐品都不进候选，
+    # 不会被「想吃脆的」等其他偏好覆盖（用户 2026-10-14 要求）。
+    pool = [
+        m
+        for m in menu
+        if m.price_cents is not None
+        and classify(m) not in avoid
+        and not (avoid_tastes and taste_hit(m, tuple(avoid_tastes)))
+    ]
     ranked = {cat: _rank(pool, c, nutrition, cat) for cat in ("main", "side", "drink", "dessert")}
     candidates: list[list[PlanItem]] = []
     seen = set()
@@ -472,6 +481,12 @@ def build_plan(
                 f"排除「{cats}」品类后没有可用餐品，无法生成方案；"
                 "可尝试取消该限制（例如改为「少点饮料」而非「不要饮料」）"
             )
+        elif c.avoid_tastes:
+            tastes = "、".join(TASTE_CN.get(t, t) for t in c.avoid_tastes)
+            warnings.append(
+                f"排除「不吃{tastes}」后没有可用餐品，无法生成方案；"
+                "可尝试放宽口味限制（避免口味是硬约束，不会被其他偏好覆盖）"
+            )
         else:
             warnings.append("没有找到符合口味/搭配要求的餐品组合")
         return [], warnings
@@ -601,6 +616,10 @@ def _build_reasons(opt: PlanOption, c: Constraints, nutrition: list[NutritionIte
         drinks = _drink_qty(opt.items)
         if drinks <= c.max_drink_qty:
             reasons.append(f"饮料 {drinks} 份，符合少饮偏好（≤{c.max_drink_qty}）")
+    if c.avoid_tastes:
+        reasons.append(
+            "已排除避免口味：" + "/".join(TASTE_CN.get(t, t) for t in c.avoid_tastes)
+        )
     if c.people >= 2:
         main_qty = sum(pi.qty for pi in opt.items if classify(pi.item) == "main")
         if main_qty >= c.people:
