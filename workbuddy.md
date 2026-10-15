@@ -184,20 +184,3 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 联调状态：**当前 WorkBuddy 会话未配置 mcd-mcp 连接器**（list_installed_plugins 仅 GitHub 且禁用）——按要求完成离线测试并标记联调阻塞，未伪造真实调用。此前经 Python SDK + 真实 Token 的端到端验证记录见 MCP_INTEGRATION.md §3.5/§3.7。
 
 测试 214 → 234 全绿。
-
-## 5.12 安全加固 + 安装可复现（2026-10-14）
-
-**安全加固（审计四领域，修复 1 个真实漏洞）**：
-- 凭据与隐私核查通过：Token 仅环境变量/构造传入；错误消息/审计 args/卡片/JSON/摘要全路径不泄露（FAKE_TOKEN 断言）；无静默持久化；.gitignore 补 *.log/*.tmp/*.bak；示例配置仅占位符；仓库无硬编码 Token（正则扫描）。
-- **修复：Markdown 成就卡 XSS 缺口**——story（含用户地点）与 constraints.describe() 在 HTML 卡有转义但 MD 卡漏转义，多数 MD 渲染器透传内联 HTML。已补 html.escape + 回归测试（test_security.py 21 用例）。
-- MCP 返回视为不可信数据：注入文本（ignore previous instructions/泄露 Token/script）只被 extract_api_json 当数据提取；携带注入指令时 Token 零泄露。
-- 业务规则：价格未知≠0、券失败必明示、无库存断言、真实模式失败不降级 Mock（CLI 退出码 2 无演示数据泄漏）。
-- 操作边界：完整流程只调只读工具（WRITE_TOOLS 允许 list）、重试不针对写操作。
-
-**安装可复现（修复 1 个真实 bug）**：
-- **修复：fixtures/demo_data.json 在包外**，FIXTURE_PATH 指向 `<site-packages>/../fixtures/`，pip install 后 demo 模式必坏。已移入包内 `burger_quest/data/demo_data.json` + pyproject package-data 声明。
-- pyproject：补 keywords/classifiers/urls、package-data；requirements.txt 改为指向 `pip install -e ".[dev]"`（消除与 pyproject 的重复声明，单一事实来源）。
-- **独立 venv 实测**：① 可编辑安装 `pip install -e .[dev]` → 数据在包内；② 构建 wheel 检查包含 burger_quest/data/demo_data.json；③ 第二个干净 venv 装 wheel，从 $HOME（仓库外）跑 `burger-quest demo` 与 `python -m burger_quest --version` 均正常，255 测试全过。
-- README：安装节重写（三种入口+依赖分层），修复章节编号错位（成就卡预览 4.2→4.4、6.5→7 顺延），目录树补 data/，测试数 234→255。
-
-测试 234 → 255 全绿。
