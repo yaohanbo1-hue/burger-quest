@@ -101,8 +101,20 @@ python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园�
 # 2. Token 只通过环境变量提供（切勿写进代码或提交仓库）
 export MCD_MCP_TOKEN="你的Token"
 
-# 3. 直接按位置规划（自动用官方 query-nearby-stores 查询附近门店）
-python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"
+# 3a. 到店场景：按位置规划（官方 query-nearby-stores 查附近门店，多家则列出候选）
+python -m burger_quest quest "我想吃辣，预算35，在深圳市南山区科技园，到店自取"
+```
+
+**两种场景走不同的官方工具链**（不可互相替代）：
+
+| 场景 | 门店确定方式 | 前提条件 |
+| --- | --- | --- |
+| 到店自取 / 堂食 | `query-nearby-stores`（按 city/keyword，`beType=1`） | 提供位置或门店编码 |
+| 外送（麦乐送） | `delivery-query-addresses`（已保存地址）→ `delivery-query-stores`（可配送门店 + beCode） | **账户须已在麦当劳官方 App/小程序保存配送地址**；没有符合条件的地址时明确提示，不伪造外送能力 |
+
+```bash
+# 3b. 外送场景（需要账户已有保存的配送地址）
+python -m burger_quest quest "我想吃辣，预算35，外送到深圳市南山区科技园"
 ```
 
 行为约定（与演示模式彻底分离）：
@@ -155,11 +167,16 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 | 辣味外送成就卡 | DEMO | [demo_spicy.html](examples/cards/demo_spicy.html) · [demo_spicy.md](examples/cards/demo_spicy.md) · [预览图](examples/cards/demo_spicy.png) |
 | 多人丰盛成就卡 | DEMO | [demo_share.html](examples/cards/demo_share.html) · [demo_share.md](examples/cards/demo_share.md) |
 | 低卡轻食成就卡 | DEMO | [demo_light.html](examples/cards/demo_light.html) · [demo_light.md](examples/cards/demo_light.md) |
-| 真实 MCP 成就卡 | **LIVE** | [live_real.html](examples/cards/live_real.html) · [live_real.md](examples/cards/live_real.md) · [预览图](examples/cards/live_real.png) |
+| 真实 MCP 成就卡 | **LIVE SNAPSHOT**（历史快照） | [live_real.html](examples/cards/live_real.html) · [live_real.md](examples/cards/live_real.md) · [预览图](examples/cards/live_real.png) |
 
 卡片诚实性设计：总价只认 `calculate-price` 权威结果（未核验显示「未知」）；营养信息只在官方
 返回真实数据时展示，缺失明确显示「未知」而非装饰数字（见 LIVE 示例卡的属性面板）；
 每件装备标注商品编码与数据来源，可回溯核查。
+
+> 📸 **LIVE SNAPSHOT 说明**：`live_real.*` 是真实 MCP 调用的**历史快照**（卡内标注生成时间），
+> 不会自动刷新——卡内金额、优惠与供应状态**仅代表该次查询时的返回结果**，不代表麦当劳当前价格、
+> 优惠或库存。生成快照卡：`quest "…" --card-snapshot --card-html card.html`（该标记仅适用于真实模式；
+> 演示数据即使加该标记也只会显示 DEMO 徽章，有专项测试守卫）。
 
 ## 5. 使用示例
 
@@ -196,7 +213,7 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 python -m pytest tests/ -v
 ```
 
-214 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）。
+257 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）。
 
 ### MCP 调用效率（2026-10-14 实测，优化前后对比）
 
@@ -335,7 +352,7 @@ burger-quest/
 │   ├── smoke.py              只读 MCP 冒烟测试
 │   ├── cli.py                命令行入口
 │   └── data/demo_data.json   演示数据（随包分发，明确标注非实时）
-├── tests/                    255 个测试
+├── tests/                    257 个测试
 └── examples/                 可复现演示与示例卡片
 ```
 

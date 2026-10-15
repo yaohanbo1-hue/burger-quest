@@ -48,10 +48,23 @@ def _level_and_tier(c: Constraints) -> tuple[int, str]:
     return 4, tier
 
 
-def _mode_badge(demo: bool) -> str:
+def _mode_badge(demo: bool, snapshot: bool = False) -> str:
     if demo:
         return '<span class="mode demo">DEMO · 离线演示数据</span>'
+    if snapshot:
+        # 历史快照：真实 MCP 调用产生，但不会自动刷新——必须与实时数据区分
+        return '<span class="mode snapshot">LIVE SNAPSHOT · 真实 MCP 历史实测</span>'
     return '<span class="mode live">LIVE · 麦当劳 MCP 实时数据</span>'
+
+
+def _snapshot_note(generated_at: str) -> str:
+    """历史快照免责声明：金额仅代表该次查询返回，不代表当前状态。"""
+    e = html.escape
+    return (
+        '<div class="snapshot-note">📸 本卡为真实 MCP 调用的<b>历史快照</b>'
+        f"（生成时间 {e(generated_at)}），不会自动刷新；卡内金额、优惠与供应状态"
+        "<b>仅代表该次查询时的返回结果</b>，不代表麦当劳当前价格、优惠或库存。</div>"
+    )
 
 
 def _gear_rows(option: PlanOption, demo: bool) -> str:
@@ -208,6 +221,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .mode {{ font-size:10px; padding:2px 8px; border:1px solid var(--ink); font-weight:800;
     font-family:ui-monospace,Consolas,monospace; letter-spacing:1px; }}
   .mode.live {{ background:#1f9d55; color:#fff; }}
+  .mode.snapshot {{ background:#6c5ce7; color:#fff; }}
   .mode.demo {{ background:var(--mc-yellow); color:var(--ink); }}
   .quest {{ margin-top:12px; font-size:20px; font-weight:900; line-height:1.4;
     font-family:ui-monospace,Consolas,monospace; text-shadow:2px 2px 0 rgba(0,0,0,.35); }}
@@ -271,6 +285,9 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .meta {{ margin-top:16px; border-top:2px solid var(--line); padding-top:10px; font-size:11px;
     color:#8a7a5c; line-height:1.8; word-break:break-all; }}
   .meta b {{ color:#a0630f; }}
+  .snapshot-note {{ margin-top:10px; font-size:11px; color:#4a3b8c; background:#f0edfb;
+    border:2px solid #cfc4f0; padding:8px 10px; line-height:1.7; }}
+  .snapshot-note b {{ color:#2d2470; }}
   .disclaimer {{ margin-top:10px; font-size:11px; color:#b04a3a; background:#fdf3f2;
     border:2px solid #f0c9c4; padding:8px 10px; line-height:1.7; }}
   /* ---------- 移动端 ---------- */
@@ -319,6 +336,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
       <div><b>数据来源：</b>{source}</div>
       <div><b>生成时间：</b>{generated_at}</div>
     </div>
+    {snapshot_block}
     <div class="disclaimer">⚠️ {disclaimer}</div>
   </div>
 </div>
@@ -335,6 +353,7 @@ def render_html(
     source_note: str,
     generated_at: str,
     demo: bool = False,
+    snapshot: bool = False,
 ) -> str:
     e = html.escape
     if option.unmet:
@@ -345,12 +364,13 @@ def render_html(
         )
     else:
         unmet_block = ""
+    snapshot_block = _snapshot_note(generated_at) if snapshot else ""
     level, tier = _level_and_tier(constraints)
     rendered = _HTML_TEMPLATE.format(
         title=f"{PROJECT_NAME} - 任务成就卡",
         project=e(PROJECT_NAME),
         non_official=NON_OFFICIAL_TAG,
-        mode_badge=_mode_badge(demo),
+        mode_badge=_mode_badge(demo, snapshot),
         quest_name=e(rpg.quest_name(constraints, option)),
         level=level,
         tier=e(tier),
@@ -361,6 +381,7 @@ def render_html(
         nutrition_block=_nutrition_block(option),
         reasons="".join(f"<li>{e(r)}</li>" for r in option.reasons) or "<li>（无）</li>",
         unmet_block=unmet_block,
+        snapshot_block=snapshot_block,
         constraints=e(constraints.describe()),
         source=e(source_note),
         generated_at=e(generated_at),
@@ -379,11 +400,17 @@ def render_markdown(
     source_note: str,
     generated_at: str,
     demo: bool = False,
+    snapshot: bool = False,
 ) -> str:
     """Markdown 成就卡：无 HTML 环境下完整可读（表格 + 分隔线 + 徽章文本）。"""
     e = html.escape  # Markdown 同样转义，防止在渲染器里被解释为 HTML
     level, tier = _level_and_tier(constraints)
-    mode = "DEMO · 离线演示数据" if demo else "LIVE · 麦当劳 MCP 实时数据"
+    if demo:
+        mode = "DEMO · 离线演示数据"
+    elif snapshot:
+        mode = "LIVE SNAPSHOT · 真实 MCP 历史实测"
+    else:
+        mode = "LIVE · 麦当劳 MCP 实时数据"
     lines = []
     lines.append(f"# 🍔 {PROJECT_NAME} · 任务成就卡")
     lines.append("")
@@ -465,6 +492,13 @@ def render_markdown(
         lines.append("")
         for u in option.unmet:
             lines.append(f"- ⚠️ {e(u)}")
+    if snapshot:
+        lines.append("")
+        lines.append(
+            f"> 📸 **历史快照说明**：本卡为真实 MCP 调用的历史快照（生成时间 {e(generated_at)}），"
+            "不会自动刷新；卡内金额、优惠与供应状态**仅代表该次查询时的返回结果**，"
+            "不代表麦当劳当前价格、优惠或库存。"
+        )
     lines.append("")
     lines.append("---")
     lines.append("")

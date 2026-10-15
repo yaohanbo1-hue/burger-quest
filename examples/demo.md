@@ -101,9 +101,9 @@ python -m burger_quest demo "预算5块，想吃汉堡"
 | 辣味外送成就卡 | DEMO | [demo_spicy.html](cards/demo_spicy.html) · [demo_spicy.md](cards/demo_spicy.md) · [预览图](cards/demo_spicy.png) |
 | 多人丰盛成就卡 | DEMO | [demo_share.html](cards/demo_share.html) · [demo_share.md](cards/demo_share.md) |
 | 低卡轻食成就卡 | DEMO | [demo_light.html](cards/demo_light.html) · [demo_light.md](cards/demo_light.md) |
-| 真实 MCP 成就卡 | **LIVE** | [live_real.html](cards/live_real.html) · [live_real.md](cards/live_real.md) · [预览图](cards/live_real.png) |
+| 真实 MCP 成就卡 | **LIVE SNAPSHOT**（历史快照） | [live_real.html](cards/live_real.html) · [live_real.md](cards/live_real.md) · [预览图](cards/live_real.png) |
 
-`live_real.*` 为真实 MCP Token 联调时的实际输出（2026-10-14，门店 1420762），卡片上带 `LIVE · 麦当劳 MCP 实时数据` 徽章与商品编码溯源；DEMO 卡则全程标注演示数据。
+`live_real.*` 为真实 MCP Token 联调时的实际输出（门店 1420762），卡片带 `LIVE SNAPSHOT · 真实 MCP 历史实测` 徽章、生成时间与商品编码溯源，并明确声明「金额仅代表该次查询时的返回结果，不代表当前价格、优惠或库存」；DEMO 卡则全程标注演示数据。重新生成快照卡：`quest "…" --store-code <编码> --card-snapshot --card-html examples/cards/live_real.html`。
 
 ## 7. 附：查看引擎使用的 MCP 工具
 

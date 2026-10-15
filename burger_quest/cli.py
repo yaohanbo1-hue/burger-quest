@@ -224,6 +224,12 @@ def main(argv=None) -> int:
         p.add_argument("--card-html", type=Path, default=None, help="分享卡 HTML 输出路径")
         p.add_argument("--card-md", type=Path, default=None, help="分享卡 Markdown 输出路径")
         p.add_argument("--json", type=Path, default=None, help="结构化结果 JSON 输出路径")
+        p.add_argument(
+            "--card-snapshot",
+            action="store_true",
+            help="成就卡标注为「LIVE SNAPSHOT 历史快照」：真实 MCP 调用的历史结果，"
+            "明确声明金额不代表当前价格/优惠/供应状态（用于存档分享真实查询结果）",
+        )
 
     p_demo = sub.add_parser(
         "demo",
@@ -316,12 +322,18 @@ def main(argv=None) -> int:
     if args.cmd == "demo":
         from .mcp_mock import MockMCPClient
 
+        if args.card_snapshot:
+            # 演示数据不得伪装成真实 MCP 历史快照——明确提示并忽略该标记
+            print("⚠️ --card-snapshot 仅适用于真实 MCP 模式（quest）；演示数据不会标注 LIVE SNAPSHOT")
         try:
             client = MockMCPClient(fixture_path=args.fixture)
         except MCPError as e:
             print(f"❌ {e}")
             return 2
-        result = run_quest(args.text, client, store_code=args.store_code, generated_at=now)
+        result = run_quest(
+            args.text, client, store_code=args.store_code, generated_at=now,
+            card_snapshot=args.card_snapshot,
+        )
         return _print_result(result, args.card_html, args.card_md, args.json, mode="demo")
 
     if args.cmd == "quest":
@@ -329,7 +341,10 @@ def main(argv=None) -> int:
 
         try:
             with HttpMCPClient() as client:
-                result = run_quest(args.text, client, store_code=args.store_code, generated_at=now)
+                result = run_quest(
+                    args.text, client, store_code=args.store_code, generated_at=now,
+                    card_snapshot=args.card_snapshot,
+                )
         except MCPError as e:
             print(f"❌ {e}")
             return 2

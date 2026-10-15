@@ -323,3 +323,87 @@ def test_markdown_card_has_no_trailing_whitespace():
     r = _result()
     bad = [line for line in r.card_markdown.split("\n") if line != line.rstrip()]
     assert not bad, f"行尾空白: {bad[:3]}"
+
+
+# ---------------------------------------------------------------------------
+# LIVE 历史快照语义（2026-10-15 发布审计新增）
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_cards():
+    """直接渲染快照卡（demo=False：快照标记只属于真实 MCP 历史结果）。"""
+    r = _result()
+    html = cards.render_html(
+        r.constraints, r.chosen, r.store, r.time_info, r.data_sources["mode"],
+        "2026-10-14 20:27:01", demo=False, snapshot=True,
+    )
+    md = cards.render_markdown(
+        r.constraints, r.chosen, r.store, r.time_info, r.data_sources["mode"],
+        "2026-10-14 20:27:01", demo=False, snapshot=True,
+    )
+    return html, md
+
+
+def test_snapshot_badge_and_disclaimer():
+    """快照卡：LIVE SNAPSHOT 徽章 + 历史快照说明（含生成时间与时效声明）。"""
+    html, _md = _snapshot_cards()
+    assert "LIVE SNAPSHOT · 真实 MCP 历史实测" in html
+    assert "历史快照" in html
+    assert "2026-10-14 20:27:01" in html
+    assert "仅代表该次查询时的返回结果" in html
+    assert "不代表麦当劳当前价格、优惠或库存" in html
+    # 不再使用实时 LIVE 徽章
+    assert "LIVE · 麦当劳 MCP 实时数据" not in html
+
+
+def test_snapshot_markdown_note():
+    _html, md = _snapshot_cards()
+    assert "LIVE SNAPSHOT · 真实 MCP 历史实测" in md
+    assert "历史快照说明" in md
+    assert "2026-10-14 20:27:01" in md
+    assert "仅代表该次查询时的返回结果" in md
+
+
+def test_live_card_without_snapshot_has_no_snapshot_note():
+    """普通实时卡不得带快照说明（避免语义混淆）。"""
+    html, _md = _snapshot_cards()
+    assert "历史快照" in html  # 上面已验快照卡有
+    r = _result()
+    plain = cards.render_html(
+        r.constraints, r.chosen, r.store, r.time_info, r.data_sources["mode"],
+        "2026-10-15 21:00:00", demo=False, snapshot=False,
+    )
+    assert "LIVE SNAPSHOT" not in plain
+    assert "历史快照" not in plain
+
+
+def test_snapshot_card_keeps_real_data_and_provenance():
+    """快照卡保留真实数据与溯源（不因快照语义丢失商品编码/来源）。"""
+    html, md = _snapshot_cards()
+    assert "商品编码" in html and "来源" in html
+    assert "calculate-price 权威结果" in md
+    assert rpg_price_total(_result()) in md  # 真实总价仍在卡上
+
+
+def rpg_price_total(r):
+    return rpg.price_lines(r.chosen, r.constraints)[-1].split("：", 1)[1].split("（")[0]
+
+
+def test_snapshot_card_still_escapes_malicious_input():
+    """快照语义不影响转义（纵深防御）。"""
+    r = _result("外送到<b>测试</b>科技园，预算35")
+    html = cards.render_html(
+        r.constraints, r.chosen, r.store, r.time_info, r.data_sources["mode"],
+        "2026-10-14 20:27:01", demo=False, snapshot=True,
+    )
+    assert "<b>测试</b>" not in html
+    assert "&lt;b&gt;测试&lt;/b&gt;" in html
+    assert "LIVE SNAPSHOT" in html
+
+
+def test_demo_data_never_marked_as_live_snapshot():
+    """红线：演示数据即使传了 snapshot 也不得标 LIVE SNAPSHOT（mock 即 demo）。"""
+    client = MockMCPClient()
+    r = run_quest("我想吃辣，预算35，外送到南山科技园，一个人", client, generated_at="2026-10-14 20:27:01", card_snapshot=True)
+    assert "LIVE SNAPSHOT" not in r.card_html
+    assert "DEMO · 离线演示数据" in r.card_html  # 演示数据只能标 DEMO

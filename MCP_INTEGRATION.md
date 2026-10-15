@@ -17,22 +17,29 @@
 | 服务范围 | 中国大陆地区（不含港澳台） |
 | 官方文档 | <https://github.com/M-China/mcd-mcp-server> |
 
-## 2. 实际使用的工具（8 个）
+## 2. 实际使用的工具（8 个核心 + 2 个外送场景专用）
 
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。
+**场景不同，实际使用的工具并不必然完全相同**：
+
+- **8 个核心工具**：任何场景（到店/外送）都会用到；
+- **2 个外送专用工具**（`delivery-query-addresses` / `delivery-query-stores`）：仅外送场景使用，且需要账户已保存配送地址。
 
 | 工具 | 用途 | 在调用链中的位置 |
 | --- | --- | --- |
 | `now-time-info` | 当前时间信息（时段上下文） | 第 1 步，失败不阻塞 |
-| `delivery-query-addresses` | 用户已保存的配送地址（取 addressId/beCode） | 第 2 步（仅外送） |
-| `delivery-query-stores` | 某配送地址可配送的门店（含 beCode） | 第 2 步（仅外送） |
-| `query-nearby-stores` | 按 city/keyword 查询附近门店（searchType=2） | 第 2 步，确定作战据点（多家候选时列出待选） |
+| `query-nearby-stores` | 按 city/keyword 查询附近门店（searchType=2，**仅到店场景**） | 第 2 步，确定作战据点（多家候选时列出待选） |
 | `query-meals` | 查询门店可售餐品**骨架**（分类/编码/标签） | 第 3 步，**真实菜单的唯一来源** |
-| `query-meal-detail` | 按编码查餐品详情（名称/套餐 rounds） | 第 4 步，**名称的唯一来源** |
+| `calculate-price` | 按商品列表（可含优惠券）计算金额、配送费、优惠与应付总价 | 第 4 步**价格发现**（名称+单价）+ 第 8 步**组合验价**，**价格与总价的唯一权威来源** |
+| `query-meal-detail` | 按编码查餐品详情（名称/套餐 rounds） | 第 4b 步，**仅回退补名**（`productList` 缺名称时；实测通常 0 次） |
 | `query-store-coupons` | 当前门店可用优惠券列表 | 第 5 步，券池来源之一 |
 | `query-my-coupons` | 我的卡包优惠券 | 第 5 步，券池来源之二 |
 | `list-nutrition-foods` | 常见餐品营养数据（能量/蛋白质/脂肪/碳水/钠/钙） | 第 6 步，低卡/高蛋白筛选依据 |
-| `calculate-price` | 按商品列表（可含优惠券）计算金额、配送费、优惠与应付总价 | 第 7/9 步，**价格与总价的唯一权威来源** |
+| *（外送专用）* `delivery-query-addresses` | 用户已保存的配送地址（取 addressId/beCode） | 第 2 步，**仅外送场景**；无地址 → 明确说明并停止 |
+| *（外送专用）* `delivery-query-stores` | 某配送地址可配送的门店（含 beCode） | 第 2 步，**仅外送场景** |
+
+> 注：`query-nearby-stores` 是**到店场景**的位置查询（`beType=1`）；外送场景的门店来自
+> `delivery-query-stores`（按已保存地址），两者不可互相替代。
 
 ### 预留但 MVP 不主动调用的工具
 
@@ -59,29 +66,36 @@
   ├─(3) query-meals(storeCode, orderType, beType) ► 菜单骨架（只有编码/分类/标签）
   │      └─ 失败 → 明确提示「菜单查询失败」，停止生成（不编造餐品）
   │
-  ├─(4) 短名单（每分类 Top3、共 ≤10 个）逐个 query-meal-detail(code) ► 餐品名称
+  ├─(4) calculate-price（短名单全部商品各 1 件，不带券）► 价格发现（2026-10-14 优化后）：
+  │      从 productList 同时取 productName（名称）与 subtotal（真实单价，单位：分）
+  │      └─ 失败 → 不出方案（没有权威价格就不编造）
+  │
+  ├─(4b) 仅当 productList 未返回名称的商品：逐个 query-meal-detail(code) 回退补名
   │      └─ 拿不到名称 → 跳过；全部失败 → 停止（不编造餐品名）
+  │      （实测通常 0 次调用；优化前此步为全量 ≤10 次，见 §3.8 优化记录）
   │
   ├─(5) query-store-coupons + query-my-coupons ► 真实券池（失败 → 按无券计算并提示）
   │
   ├─(6) list-nutrition-foods ─────────► 营养数据（失败 → 不展示营养，不影响方案）
   │
-  ├─(7) calculate-price（短名单全部商品各 1 件）► 价格发现：
-  │      从 productList 的 subtotal 取每件商品真实单价（单位：分）
-  │      └─ 失败 → 不出方案（没有权威价格就不编造）
-  │
-  ├─(8) planner 生成候选组合（模板：单人饱腹/轻食低卡/省钱/多人分享/丰盛飨宴）
+  ├─(7) planner 生成候选组合（模板：单人饱腹/轻食低卡/省钱/多人分享/丰盛飨宴）
   │      └─ 预算预筛（真实单价 + 配送费估算 + 25% 余量，控 MCP 调用次数）
   │
-  ├─(9) calculate-price × N ──────────► 每个候选组合验价（无券 / 单券 / 门店券×我的券）
+  ├─(8) calculate-price × N ──────────► 每个候选组合验价（券试探：最优单券→最优双券→全拒回退无券）
   │      └─ 全部失败 → 不出方案（不用单价加总冒充权威总价）
   │
-  ├─(10) 预算过滤 + 排序 → PlanOption[]
+  ├─(9) 预算过滤 + 排序 → PlanOption[]
   │
-  └─(11) rpg 文案 + cards 分享卡（含非官方声明与数据来源）
+  └─(10) rpg 文案 + cards 分享卡（含非官方声明与数据来源）
 ```
 
-**调用量控制**：短名单 ≤10 次 `query-meal-detail` + 1 次价格发现 + 候选组合上限 6 个 × 每个最多 3 次验价 ≈ 28 次/任务，远低于 600 次/分钟限流。
+**调用量控制**（2026-10-14 优化后实测）：基础 5-6 次（时间/门店/菜单/价格发现/券×2/营养）+ 组合验价
+（候选 ≤6 个 × 每组合 ≤2 次券试探）≈ **单任务 7-15 次**（演示最坏 15、真实典型 7），远低于 600 次/分钟限流。
+优化前为「≤10 次详情补名 + 每组合 ≤8 次券试探 ≈ 28 次/任务」——新旧差异与优化手段详见 §3.8；
+调用量可用 `tools/measure_calls.py` 复测。
+
+> **缓存边界**：`calculate-price` 与优惠券查询**绝不缓存**（价格/券池实时变，必须当次核验）；
+> 只读查询（时间 30s / 门店 2min / 菜单与详情 5min / 营养 10min）做任务内去重与短 TTL 缓存。
 
 ## 3.5 联调实测记录（2026-10-13，官方 Token）
 
@@ -113,13 +127,13 @@
 ### 返回结构（实测）
 
 1. **文本信封**：字段说明 + `## Original Response` + `{"success":true,"code":200,...,"data":...}` + 传参规则说明；`success=false` 时 `message` 是业务错误（如「外送场景下，beType=2/5/6时必传beCode」）→ 客户端转成可读 MCPError；
-2. **query-meals 只返回编码**：`data.categories[].meals[].code + tags[]`，**无名称、无价格**——这是服务端采用「详情补名 + 算价发现」链路的原因；
+2. **query-meals 只返回编码**：`data.categories[].meals[].code + tags[]`，**无名称、无价格**——名称与单价改由一次 `calculate-price` 探测的 `productList` 同时获取（2026-10-14 优化），`query-meal-detail` 仅在 `productList` 缺名称时回退；
 3. **query-meal-detail**：`data={code,name,rounds[],modification,supportModify}`；套餐的 rounds 含换选项（choices[].diffPrice）；
 4. **calculate-price**：`data={price,originalPrice,discount,productList[{productCode,productName,quantity,subtotal}],takeWayList[]}`，**金额单位为分**（实测麦辣鸡腿汉堡 2250 = ¥22.50）；`productList` 自带餐品名称；
 5. **list-nutrition-foods**：`data` 是自定义文本 `[N]{productName,...,energyKcal,...}:` + CSV 行，按表头列序解析；
 6. **query-my-coupons**：无券时返回纯文本「暂无可用优惠券」（无 JSON）→ 适配器返回空列表。
 
-### 端到端实测（真实 Token，2026-10-13）
+### 端到端实测（真实 Token，2026-10-13；**优化前历史记录**，调用链与次数已被 §3.8 优化改变）
 
 | 场景 | 命令 | 实测结果 |
 | --- | --- | --- |
@@ -192,8 +206,8 @@ python -m burger_quest smoke --store-code 1420762 --json result.json
 ### 端到端复测（2026-10-14，SDK 2.3.0）
 
 `quest "我想吃辣，预算30，在深圳市南山区科技园，一个人，到店自取" --store-code 1420762`
-→ 110 个菜单编码 → 10 个详情 → 10 个真实价格 → 「龙焰鸡腿堡 ¥24.00，剩 ¥6.00」，
-160 条营养数据，0 张券如实说明。SDK 升级未破坏任何链路。
+→ 110 个菜单编码 → **0 次详情**（名称与单价取自一次 calculate-price 探测的 productList）→
+「龙焰鸡腿堡 ¥24.00，剩 ¥6.00」，160 条营养数据，0 张券如实说明。SDK 升级未破坏任何链路。
 
 ## 3.8 调用效率与可靠性优化（2026-10-14，实测基线后实施）
 

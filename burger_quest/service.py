@@ -198,6 +198,7 @@ def run_quest(
     client: MCPClient,
     store_code: Optional[str] = None,
     generated_at: str = "",
+    card_snapshot: bool = False,
 ) -> QuestResult:
     result = QuestResult(constraints=nlparser.parse(text))
     c = result.constraints
@@ -376,9 +377,11 @@ def run_quest(
     # 12. 分享卡
     if result.chosen is not None:
         result.card_html = cards.render_html(
-            c, result.chosen, store, result.time_info, _demo_note(client), generated_at or "（未提供）", demo=demo
+            c, result.chosen, store, result.time_info, _demo_note(client), generated_at or "（未提供）",
+            demo=demo, snapshot=card_snapshot,
         )
         result.card_markdown = cards.render_markdown(
-            c, result.chosen, store, result.time_info, _demo_note(client), generated_at or "（未提供）", demo=demo
+            c, result.chosen, store, result.time_info, _demo_note(client), generated_at or "（未提供）",
+            demo=demo, snapshot=card_snapshot,
         )
     return result
