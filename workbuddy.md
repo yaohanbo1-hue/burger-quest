@@ -218,3 +218,23 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 **README 展示**：首屏成就卡预览图（真实运行产物）；架构图与数据流改为 Mermaid（与现行「算价探测前置」链路一致，替换过时 ASCII 图）；示例数字按当前引擎输出校正；补凭据安全提示与贡献小节；GitHub Topics 经 API 设置（mcp/model-context-protocol/python/ai-agent/mcdonalds/game/skill/chatbot/rpg）。
 
 测试 255 → 257；CI 全绿；远端 main 与本地 HEAD 内容一致（api_push dry-run 0 差异）。
+
+## 5.14 最终交付验收（2026-10-15，全部实跑）
+
+**第一部分 · 真实 MCP 冒烟（只读，Token 经环境变量，日志脱敏）**：
+- `burger-quest smoke` 8/8 PASS：连接 / list_tools（35 个工具，项目 8 个在位）/ now-time-info / query-nearby-stores（5 家候选）/ query-meals（114 编码）/ query-meal-detail（鸡薯双全盒）/ calculate-price（¥15.90，单位分）/ 安全自检（仅只读工具）；
+- 真实端到端：`quest 预算50 想吃辣 --store-code 1420762` → 3 个可比较方案（龙焰鸡腿堡×2 ¥48 / 单堡 ¥24 / 麦辣鸡翅4块中套餐 ¥36.50），全部 calculate-price 权威核验；营养库无「龙焰鸡腿堡」记录 → 属性面板明确「未知」不猜测；
+- 未调用任何写操作（create-order/cancel-order/auto-bind-coupons/draw-lottery 等）。
+
+**第二部分 · 参赛文件**：README/CONTEST_DECLARATION/MCP_INTEGRATION/mcp-config.example.json/源码/测试/workbuddy.md 均在 GitHub 可访问；**CONTEST_DECLARATION.md 与官方仓库字节级一致**（已比对 M-China/mcd-developer-innovation-challenge，538 字符 sha256 匹配）；mcp-config.example.json 仅 `${MCD_MCP_TOKEN}` 占位符。
+
+**第三部分 · 自动化验收**：pytest 257 passed；run_demos.py 8/8 场景行为符合预期；CLI --help exit 0 / 缺 Token exit 2 不回退；compileall + JSON 配置合法；git diff --check 干净；Token 扫描 0 命中；真实模式不降级 Mock 3 项专项测试通过；**干净克隆验收**（codeload 拉取官方 main tarball → 新 venv `pip install -e .[dev]` → 257 测试 → demo ¥34/剩¥1 → run_demos 全通过）。
+
+**第四部分 · GitHub 与赛事状态**：
+- 仓库公开 ✅；创建时间 2026-10-13（在 2025-12-25~2026-10-25 允许窗口内）；
+- **报名已确认成功**：官方 Issue #633 有 M-China-Official 回复「您的作品已成功参赛」（2026-10-13T11:59:16Z）；
+- 截止时间：报名及排名 2026-10-25 23:59；最终排名以 2026-10-26 00:00 采集数据为准；奖品信息提交截止 2026-11-14；
+- 排行榜：RANKING.md（更新时间 2026-10-15 21:00）暂未列出本项目——官方定时采集，当前 Star=1（>0），等待下一次采集入榜；
+- CI 真实成功记录：最近 4 次运行（493508de/507a8b6/d24b3ab/b695652f）全部 success，最新一次即当前远端 main。
+
+**第五部分 · 发布**：全部改动已提交并推送（远端 main 与本地 HEAD 内容一致，api_push dry-run 0 差异；未 force push）。
