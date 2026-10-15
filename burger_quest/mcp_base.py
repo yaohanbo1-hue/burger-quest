@@ -79,6 +79,9 @@ TOOLS_RESERVED = [
     "create-order",
     "cancel-order",
     "query-order",
+    "query-lottery-info",
+    "draw-lottery",
+    "query-my-prizes",
 ]
 
 # 工具 -> 调用用途（审计与调用次数分析用；calculate-price 的用途由调用方细化）

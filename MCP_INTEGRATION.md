@@ -249,6 +249,19 @@ python -m burger_quest smoke --store-code 1420762 --json result.json
 
 独立运行的 Python 引擎（`python -m burger_quest quest`）使用官方 `mcp` Python SDK 做同样的 Streamable HTTP 调用，用于可复现演示、自动化测试与脱离宿主环境的集成。
 
+### Skill 与代码的一致性守卫
+
+`skill.md`（WorkBuddy 技能入口）与仓库代码保持同步，由 `tests/test_skill_docs.py` 自动校验：
+
+- 文档中提到的每个 MCP 工具名都必须在 `TOOLS_USED` / `TOOLS_RESERVED` 真实清单内（防虚构工具名）；
+- 引擎使用的 8 个工具 + 外送 2 个工具都必须在文档中说明；
+- 必备章节（角色定位/前置检查/解析/调用链/规划/输出/卡片/错误处理/红线/对话示例）齐全；
+- 文档声称的解析规则与 `nlparser` 实际行为一致（10 条抽查）；
+- 文档中三个数值示例与引擎实际输出一致（示例可执行、不编数字）；
+- 调用链描述与 `service.py` 实际顺序一致（算价探测前置取名称与单价、详情仅作回退）。
+
+改工具名、改调用链或改解析规则时，该测试会失败——文档与代码不允许漂移。
+
 ## 6. 数据处理与隐私
 
 - MCP Token 只从环境变量或宿主连接器配置读取，不落库、不写日志、不进 Git（`mcp-config.example.json` 仅含占位符）；

@@ -166,3 +166,21 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 7. **示例卡片**（实际运行数据生成）：examples/cards/ 下 demo_spicy / demo_share / demo_light（DEMO）+ live_real（真实 MCP，Edge 无头截图 live_real.png / demo_spicy.png / demo_spicy_mobile.png 已验证渲染，未伪造截图）。
 
 测试 198 → 214 全绿。
+
+## 5.11 skill.md 打磨（2026-10-14）
+
+目标：让 Skill 在 WorkBuddy 中稳定、自然地调用 mcd-mcp 连接器。先读现有 skill.md/MCP_INTEGRATION/代码，核对差异后重写：
+
+1. **角色定位**（要求 2）：明确「友好的 RPG 游戏主持人 + 谨慎的点餐规划助手」双重身份；事实优先于剧情、谨慎优先于热情、简洁优先于演出（不为剧情追问角色设定）；
+2. **调用链与实际代码对齐**（要求 1/3）：原文档写「逐个 query-meal-detail 拿名称」已过时——现行 service.py 是「一次 calculate-price 探测同时从 productList 拿名称+单价，详情仅回退」；券试探从「无券/单券/双券都探」改为「最优单券→最优双券→全失败回退无券」；文档同步更新并加效率提示（单任务 7-15 次调用）；
+3. **连接器使用**（要求 4）：明确使用 WorkBuddy 已配置的 mcd-mcp 连接器，**绝不在对话中索要 Token**、不把 Token 写进文件；
+4. **诚实性**（要求 5/6/7）：不虚构工具 Schema/菜单/价格/优惠/门店；LIVE/DEMO 必须分明，不得把演示数据说成实时查询；实时查询失败要明确告知无法验证数据，话术模板给出三种后续选项；
+5. **追问纪律**（要求 8/9）：模糊/缺失/冲突的处理表格——地点模糊追问地址、人数缺失可按 1 人规划并注明、预算缺失不追问、冲突明示处理方式；**RPG 设定缺失不追问**；
+6. **操作边界**（要求 10）：红线章节列明 create-order/cancel-order/auto-bind-coupons/available-coupons/draw-lottery 等写操作不调用（TOOLS_RESERVED 补登记 query-lottery-info/draw-lottery/query-my-prizes 三个官方真实工具，与文档红线一致）；
+7. **事实与文案分离**（要求 11）：输出格式固定结构 + LIVE/DEMO 标注 + 未核验/缺失显「未知」；
+8. **五个对话示例**（要求 12）：预算受限（¥12→最接近 ¥13 超 ¥1）/两人用餐（¥91-5=¥86）/营养偏好（低卡 540 千卡）/地点模糊（简洁追问）/MCP 暂时不可用（诚实失败+三个选项）。**示例数字全部用引擎实际输出校正**（初版凭印象写的 ¥20/¥37 与引擎不符，已按实测修正——不编数字）；
+9. **文档一致性测试**（test_skill_docs.py，20 用例）：工具名必须真实存在、必备章节齐全、红线条款在场、解析规则与 nlparser 一致（10 条抽查）、三个数值示例与引擎输出一致、调用链描述与 service.py 顺序一致、frontmatter 有效。测试抓到两处真实问题（draw-lottery 未登记、query-nearby-stores 带参数书写），已修复。
+
+联调状态：**当前 WorkBuddy 会话未配置 mcd-mcp 连接器**（list_installed_plugins 仅 GitHub 且禁用）——按要求完成离线测试并标记联调阻塞，未伪造真实调用。此前经 Python SDK + 真实 Token 的端到端验证记录见 MCP_INTEGRATION.md §3.5/§3.7。
+
+测试 214 → 234 全绿。
