@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import html
+import re
 from typing import Optional
 
 from .models import Constraints, PlanOption, Store, format_yuan
@@ -345,7 +346,7 @@ def render_html(
     else:
         unmet_block = ""
     level, tier = _level_and_tier(constraints)
-    return _HTML_TEMPLATE.format(
+    rendered = _HTML_TEMPLATE.format(
         title=f"{PROJECT_NAME} - 任务成就卡",
         project=e(PROJECT_NAME),
         non_official=NON_OFFICIAL_TAG,
@@ -365,6 +366,9 @@ def render_html(
         generated_at=e(generated_at),
         disclaimer=e(DISCLAIMER),
     )
+    # 消除行尾空白：模板占位符（budget_bar/unmet_block）为空时会留下纯空格行，
+    # 既让 git diff --check 干净，也让分享出去的 HTML 更整洁
+    return re.sub(r"[ \t]+$", "", rendered, flags=re.MULTILINE)
 
 
 def render_markdown(

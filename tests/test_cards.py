@@ -310,3 +310,16 @@ def test_markdown_unknown_total():
     c = nlparser.parse("预算50")
     md = cards.render_markdown(c, opt, None, "", "来源", "2026-10-14", demo=True)
     assert "未知（未通过 calculate-price 权威核验）" in md
+
+
+def test_html_card_has_no_trailing_whitespace():
+    """渲染产物无行尾空白（模板占位符为空时不得留下纯空格行；CI 空白检查把关）。"""
+    r = _result()
+    bad = [(i + 1, line) for i, line in enumerate(r.card_html.split("\n")) if line != line.rstrip()]
+    assert not bad, f"行尾空白: {bad[:3]}"
+
+
+def test_markdown_card_has_no_trailing_whitespace():
+    r = _result()
+    bad = [line for line in r.card_markdown.split("\n") if line != line.rstrip()]
+    assert not bad, f"行尾空白: {bad[:3]}"
