@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q burger_quest tests tools
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Packaging sanity (demo data ships with the wheel)
+        run: |
+          pip install build -q
+          python -m build --wheel -o dist_check
+          python - <<'PY'
+          import glob, zipfile
+          whl = sorted(glob.glob("dist_check/*.whl"))[-1]
+          names = zipfile.ZipFile(whl).namelist()
+          assert "burger_quest/data/demo_data.json" in names, "演示数据未打进 wheel"
+          print("wheel 包含演示数据 OK:", whl.split("/")[-1])
+          PY
+
+      - name: Whitespace check
+        run: git diff --check HEAD~
+
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Secret scan (no token / real config committed)
+        run: |
+          python - <<'PY'
+          import re, pathlib
+          # 1) 不得出现真实形态的 Bearer Token（占位符除外）
+          pat = re.compile(r"Bearer\s+(?!\$\{)([A-Za-z0-9_\-]{16,})")
+          hits = []
+          for p in pathlib.Path(".").rglob("*.py"):
+              if any(x in p.parts for x in (".git", "dist_check", "__pycache__")):
+                  continue
+              for m in pat.finditer(p.read_text(encoding="utf-8", errors="ignore")):
+                  v = m.group(1)
+                  if any(w in v.lower() for w in ("fake", "test", "example", "placeholder")):
+                      continue
+                  hits.append((str(p), v[:6]))
+          assert not hits, f"疑似硬编码 Token: {hits}"
+          # 2) 示例配置只含占位符
+          cfg = pathlib.Path("mcp-config.example.json").read_text(encoding="utf-8")
+          assert "${MCD_MCP_TOKEN}" in cfg
+          # 3) CONTEST_DECLARATION.md 必须存在且非空（参赛必交）
+          decl = pathlib.Path("CONTEST_DECLARATION.md")
+          assert decl.exists() and decl.stat().st_size > 100
+          print("secret scan OK：无硬编码 Token，示例配置仅占位符，参赛声明在位")
+          PY
+
+      - name: Skill docs consistency
+        run: python -m pytest tests/test_skill_docs.py -q
+
+      - name: Offline demos still reproducible
+        run: |
+          python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人" >/dev/null
+          python -m burger_quest demo "预算5块，想吃汉堡" >/dev/null || true   # 失败场景：退出码 1 属预期
+          python -m burger_quest smoke --demo >/dev/null
+          echo "offline demos OK"
