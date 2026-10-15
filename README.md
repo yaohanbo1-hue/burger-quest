@@ -1,5 +1,10 @@
 # 🍔 Burger Quest · 麦门异世界
 
+[![CI](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/yaohanbo1-hue/burger-quest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-257%20passed-brightgreen)](#6-测试)
+
 > 输入预算、心情、口味和用餐偏好，RPG 游戏主持人替你从**麦当劳中国官方 MCP Server 的真实菜单**里，组出一份不超预算的点餐方案，并生成一张可以分享的任务成就卡。
 
 **非麦当劳官方项目** —— 本项目为「麦当劳程序员创意开发大赛」参赛作品，由参赛者独立开发。餐品信息、价格及供应状态以麦当劳官方渠道的实时结果为准。
