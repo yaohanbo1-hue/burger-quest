@@ -20,6 +20,10 @@
 - 主持人生成任务书：任务名称、故事背景、推荐装备（真实餐品）、选择理由、总价与剩余预算；
 - 一键生成分享成就卡（HTML / Markdown）。
 
+![成就卡预览（DEMO 离线演示数据实际运行生成）](examples/cards/demo_spicy.png)
+
+<sub>↑ 实际运行生成的成就卡（DEMO 数据；真实 MCP 模式带 `LIVE` 徽章）。[查看 HTML](examples/cards/demo_spicy.html) · [Markdown](examples/cards/demo_spicy.md) · [更多卡片](examples/cards/)</sub>
+
 ### 三条铁律（贯穿全部代码与测试）
 
 1. **不编造餐品**：进入方案的每一项都来自 `query-meals` 返回的真实菜单；
@@ -120,6 +124,8 @@ python -m burger_quest quest "我想吃辣，预算35" --store-code <编码>
 
 > ⚠️ `DEMO-001` / `DEMO-002` 只存在于演示数据（包内 data/demo_data.json），真实模式使用会查询失败；真实门店编码请用 `stores` 子命令获取。
 
+> 🔐 **凭据安全**：Token 只放环境变量或 WorkBuddy 连接器配置，**不要**写进代码、提交 Git 或粘贴进聊天窗口；本项目的调用审计、日志与卡片输出均不包含 Token（有专项测试断言）；`.gitignore` 已排除 `.env`、`mcp-config.json` 等真实配置。
+
 **只读冒烟测试**（验证连接 / 工具发现 / 关键查询，不调用任何写操作）：
 
 ```bash
@@ -160,9 +166,9 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 | 场景 | 输入 | 结果 |
 | --- | --- | --- |
 | 多条件综合 | `预算 35 元，想吃辣，两个人，希望尽量高蛋白，不想点太多饮料` | 最多 3 个可比较方案，全部经 calculate-price 权威核验；蛋白/少饮偏好逐条说明符合或不完全符合 |
-| 辣味外送 | `我想吃辣，预算35，外送到南山科技园，一个人` | 麦辣鸡腿堡 + 立减券 + 配送费 = ¥27，剩 ¥8 |
+| 辣味外送 | `我想吃辣，预算35，外送到南山科技园，一个人` | 麦辣鸡腿堡 + 麦辣鸡翅 + 双券：原价 ¥33 − 优惠 ¥8 + 配送费 ¥9 = 应付 ¥34，剩 ¥1 |
 | 多人丰盛 | `两个人想吃点好的，预算100，堂食` | 麦辣鸡腿堡套餐 + 巨无霸套餐 + 麦乐鸡×2 = ¥86，叠券省 ¥5（丰盛偏好下优先用足预算；同样餐品不加小食的 ¥63 方案也在候选里） |
-| 低卡轻食 | `减肥中，想吃低卡的，预算40，到店自取` | 双层吉士堡 + 玉米杯 + 零度可乐，整餐约 540 千卡 |
+| 低卡轻食 | `减肥中，想吃低卡的，预算40，到店自取` | 双层吉士堡 + 玉米杯 + 零度可乐 = 应付 ¥25，剩 ¥15，整餐约 540 千卡 |
 | 超预算参考 | `预算12块，想吃辣` | 给出最接近的真实价格方案（¥13），明确标注「超出预算 ¥1」 |
 | 预算不足 | `预算5块，想吃汉堡` | **如实失败**：明确说明没有组合落在预算内，并给调整建议，不编造价格 |
 | 多家门店 | `quest "想吃辣，预算35"`（位置附近有多家店） | 列出全部候选门店及编码并暂停，用 `--store-code` 指定后重跑 |
@@ -220,34 +226,82 @@ python -m pytest tests/ -v
 
 ## 8. 架构（分层）
 
-```
-用户一句话
-   │
-   ▼
-nlparser.py     自然语言解析：预算/口味/营养偏好/门店/用餐方式/心情/丰盛偏好
-   │  Constraints
-   ▼
-mcp_base.py     MCP 客户端接口 + 防御式适配（联调实测格式：文本信封提取/菜单骨架/算价分单位）
-   ├─ mcp_http.py   真实客户端（同步门面 + 后台事件循环，官方 mcp SDK）
-   └─ mcp_mock.py   演示客户端（包内演示数据，离线可跑）
-   │
-   ▼
-service.py      编排层（官方工具链，联调实测）：
-   │  门店解析（附近门店/配送地址，多候选列出不默选）→ query-meals 菜单骨架（只有编码）
-   │  → 短名单 query-meal-detail 补名称 → 一次 calculate-price 价格发现（单位：分）
-   ▼
-planner.py      套餐规划：候选组合模板 → 优惠券匹配 → calculate-price 权威核验 → 预算过滤
-   │  PlanOption[]
-   ▼
-rpg.py          RPG 文案：任务名/故事/装备绰号/价格叙事（只包装事实，不改数值）
-   │
-   ▼
-cards.py        分享卡渲染：HTML / Markdown（含项目名 + 非官方声明 + 数据来源）
+```mermaid
+flowchart TB
+    User["用户一句话<br/>预算35，想吃辣，两个人，尽量高蛋白"]
+
+    subgraph Parser["解析层（纯规则，无大模型依赖）"]
+        NL["nlparser.py<br/>预算/人数/口味/避免口味/营养偏好<br/>用餐方式/位置/门店名/心情/丰盛"]
+    end
+
+    User --> NL
+    NL -->|"Constraints<br/>（explicit / inferred / default 分级）"| SVC
+
+    subgraph MCPLayer["MCP 客户端层（同一接口两种实现）"]
+        BASE["mcp_base.py<br/>MCPClient 接口 + 防御式适配<br/>文本信封提取 / 菜单骨架 / 分单位金额"]
+        HTTP["mcp_http.py<br/>真实客户端：官方 mcp Python SDK<br/>Streamable HTTP + 同步门面<br/>超时/重试/去重缓存/调用审计"]
+        MOCK["mcp_mock.py<br/>演示客户端：包内演示数据（离线）"]
+        BASE --- HTTP
+        BASE --- MOCK
+    end
+
+    SVC["service.py 编排层<br/>门店解析 → 菜单骨架 → 价格发现<br/>→ 优惠/营养 → 组合验价"]
+
+    subgraph Planner["规划层"]
+        PL["planner.py<br/>候选模板 + 硬避免（不吃辣/不要饮料）<br/>优惠试探（不默认可叠加）<br/>营养覆盖度门控 + Top3 可比较方案"]
+    end
+
+    subgraph Output["输出层（只包装事实，不改数值）"]
+        RPG["rpg.py<br/>任务名/故事/装备绰号"]
+        CARD["cards.py<br/>HTML / Markdown 成就卡<br/>LIVE/DEMO 徽章 · 溯源编码 · 未知不填空"]
+    end
+
+    HTTP -->|"官方 MCP Server<br/>https://mcp.mcd.cn"| SVC
+    MOCK --> SVC
+    SVC --> PL
+    PL --> RPG --> CARD
+    CARD --> Final["可分享成就卡<br/>价格四段 + 属性面板 + 数据来源"]
+
+    style HTTP fill:#fff3cd,stroke:#da291c
+    style MOCK fill:#f8f9fa,stroke:#6c757d
+    style Final fill:#d4edda,stroke:#1f9d55
 ```
 
-业务逻辑（planner）、工具调用（mcp_*）、游戏文案（rpg）、展示层（cards）严格分离，可单测、可替换。
+**分层铁律**：业务逻辑（planner）、工具调用（mcp_*）、游戏文案（rpg）、展示层（cards）严格分离——RPG 文案只做叙事包装，**不能改变商品数量、总价与剩余预算**（有专项测试断言）。
 
-**真实数据流要点**（2026-10-13 联调实测）：官方 `query-meals` 只返回餐品编码与标签，**没有名称和价格**——名称来自 `query-meal-detail`，价格只来自 `calculate-price`（金额单位为分）。服务端因此采用「短名单 → 详情补名 → 一次算价发现全部单价 → 组合验价」的四段式链路，所有价格均可追溯到权威工具返回。
+### 从用户输入到权威价格核验的数据流
+
+```mermaid
+sequenceDiagram
+    actor U as 用户
+    participant NL as nlparser
+    participant SV as service
+    participant MCP as 麦当劳官方 MCP
+    participant PL as planner
+    participant CD as cards
+
+    U->>NL: "预算35，想吃辣，两个人，尽量高蛋白"
+    NL->>SV: Constraints（显式限制/软偏好/默认值分级）
+    SV->>MCP: now-time-info（失败不阻塞）
+    SV->>MCP: query-nearby-stores（位置→门店；多家列出不默选）
+    MCP-->>SV: 门店编码 storeCode
+    SV->>MCP: query-meals（菜单骨架：只有编码/分类/标签）
+    MCP-->>SV: categories[].meals[].code
+    SV->>MCP: calculate-price（短名单各1件=价格发现）
+    MCP-->>SV: productList：productName + subtotal（分）
+    Note over SV,MCP: 名称与单价来自同一次权威返回；<br/>productList 缺名称才回退 query-meal-detail
+    SV->>MCP: query-store-coupons / query-my-coupons / list-nutrition-foods
+    MCP-->>SV: 真实券池 + 营养数据
+    loop 每个候选组合（最多3个方案）
+        SV->>MCP: calculate-price（组合验价，含券试探）
+        MCP-->>PL: 权威应付总价（分）
+    end
+    PL->>PL: 预算过滤 + 评分排序 + 符合/不完全符合说明
+    PL->>CD: PlanOption[]
+    CD-->>U: 成就卡（LIVE/DEMO 徽章 + 价格四段 + 溯源）
+```
+
+**真实数据流要点**（2026-10-14 联调实测）：官方 `query-meals` 只返回餐品编码与标签，**没有名称和价格**——名称与单价来自一次 `calculate-price` 探测的 `productList`（金额单位为分，如 2250=¥22.50），`query-meal-detail` 仅在 `productList` 缺名称时回退调用；组合验价同样只认 `calculate-price` 返回，**绝不用菜单展示价求和冒充结算结果**。
 
 ## 9. 安全与合规
 
@@ -285,7 +339,25 @@ burger-quest/
 └── examples/                 可复现演示与示例卡片
 ```
 
-## 11. 参赛信息
+## 11. 贡献
+
+```bash
+git clone https://github.com/yaohanbo1-hue/burger-quest.git
+cd burger-quest
+pip install -e ".[dev]"        # 运行时 + 测试依赖
+python -m pytest tests/ -q     # 257 个测试
+python -m burger_quest smoke --demo   # 只读冒烟（离线）
+```
+
+贡献约定：
+
+1. **铁律不可破**：不编造餐品/价格/优惠/库存；新增能力必须带测试（含失败路径）；
+2. **文档与代码同步**：改了工具名/调用链/解析规则，`tests/test_skill_docs.py` 会校验 `skill.md` 与代码的一致性；
+3. **安全底线**：不提交任何真实 Token 或配置；HTML/Markdown 输出必须转义用户与 MCP 文本；CI 的 secret scan 会拦截；
+4. **演示数据**：`burger_quest/data/demo_data.json` 为演示数据，结构须与真实 MCP 返回保持兼容，不得冒充实时数据；
+5. 提交信息用中文描述「改了什么 + 为什么」，大改动附实测数据。
+
+## 12. 参赛信息
 
 - 比赛：麦当劳程序员创意开发大赛（<https://tch.cloud.tencent.com/contest/48>）
 - 官方 MCP 使用指南：<https://github.com/M-China/mcd-mcp-server>

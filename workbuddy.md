@@ -184,3 +184,37 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 联调状态：**当前 WorkBuddy 会话未配置 mcd-mcp 连接器**（list_installed_plugins 仅 GitHub 且禁用）——按要求完成离线测试并标记联调阻塞，未伪造真实调用。此前经 Python SDK + 真实 Token 的端到端验证记录见 MCP_INTEGRATION.md §3.5/§3.7。
 
 测试 214 → 234 全绿。
+
+## 5.12 安全加固 + 安装可复现（2026-10-14）
+
+**安全加固（审计四领域，修复 1 个真实漏洞）**：
+- 凭据与隐私核查通过：Token 仅环境变量/构造传入；错误消息/审计 args/卡片/JSON/摘要全路径不泄露（FAKE_TOKEN 断言）；无静默持久化；.gitignore 补 *.log/*.tmp/*.bak；示例配置仅占位符；仓库无硬编码 Token（正则扫描）。
+- **修复：Markdown 成就卡 XSS 缺口**——story（含用户地点）与 constraints.describe() 在 HTML 卡有转义但 MD 卡漏转义，多数 MD 渲染器透传内联 HTML。已补 html.escape + 回归测试（test_security.py 21 用例）。
+- MCP 返回视为不可信数据：注入文本（ignore previous instructions/泄露 Token/script）只被 extract_api_json 当数据提取；携带注入指令时 Token 零泄露。
+- 业务规则：价格未知≠0、券失败必明示、无库存断言、真实模式失败不降级 Mock（CLI 退出码 2 无演示数据泄漏）。
+- 操作边界：完整流程只调只读工具（WRITE_TOOLS 允许 list）、重试不针对写操作。
+
+**安装可复现（修复 1 个真实 bug）**：
+- **修复：fixtures/demo_data.json 在包外**，FIXTURE_PATH 指向 `<site-packages>/../fixtures/`，pip install 后 demo 模式必坏。已移入包内 `burger_quest/data/demo_data.json` + pyproject package-data 声明。
+- pyproject：补 keywords/classifiers/urls、package-data；requirements.txt 改为指向 `pip install -e ".[dev]"`（消除与 pyproject 的重复声明，单一事实来源）。
+- **独立 venv 实测**：① 可编辑安装 `pip install -e .[dev]` → 数据在包内；② 构建 wheel 检查包含 burger_quest/data/demo_data.json；③ 第二个干净 venv 装 wheel，从 $HOME（仓库外）跑 `burger-quest demo` 与 `python -m burger_quest --version` 均正常，255 测试全过。
+- README：安装节重写（三种入口+依赖分层），修复章节编号错位（成就卡预览 4.2→4.4、6.5→7 顺延），目录树补 data/，测试数 234→255。
+
+测试 234 → 255 全绿。
+
+## 5.13 CI + 演示材料 + README 展示优化（2026-10-15）
+
+**GitHub Actions CI（.github/workflows/ci.yml）**：
+- test job：Python 3.10-3.13 矩阵（fail-fast: false）→ install -e ".[dev]" → compileall → pytest 全量 → 打包健全性（wheel 必须含演示数据）→ git diff --check；
+- quality job：secret scan（无硬编码 Token/示例配置仅占位符/参赛声明在位）→ skill 文档一致性 → 离线演示可复现；
+- 不用个人 Token、不访问真实 MCP、不跳过失败测试；
+- **三轮真实迭代才跑绿**（都是有价值的问题）：① API 增量推送漏了 2 个 commit 导致 wheel 断言失败 → 写了 tools/api_push.py 按 git blob 内容哈希全量同步（幂等）；② checkout 默认浅克隆没有 HEAD~ → fetch-depth: 2；③ 空白检查抓到卡片模板占位符空展开留下行尾空格 → render_html 统一消除 + 回归测试；
+- 最终 run 38741854075：5 job 全绿后才加 CI 徽章（未伪造）。
+
+**安装可复现加固**：演示数据移入包内（修复 pip install 后 demo 必坏的真 bug）；requirements.txt 改为指向 pyproject（单一事实来源）；独立 venv 三重实测（可编辑安装/wheel 内容/仓库外目录跑 CLI）。
+
+**演示材料**：examples/run_demos.py 统一入口（8 场景，逐场景校验退出码与验证重点，实测 4/4 核心符合预期）；examples/demo.md 重写（用户输入/预期输出/验证重点/退出码四要素，失败场景列为核心场景）；examples/pitch.md（30 秒口播稿 + 三版介绍文案，忠于实现）。
+
+**README 展示**：首屏成就卡预览图（真实运行产物）；架构图与数据流改为 Mermaid（与现行「算价探测前置」链路一致，替换过时 ASCII 图）；示例数字按当前引擎输出校正；补凭据安全提示与贡献小节；GitHub Topics 经 API 设置（mcp/model-context-protocol/python/ai-agent/mcdonalds/game/skill/chatbot/rpg）。
+
+测试 255 → 257；CI 全绿；远端 main 与本地 HEAD 内容一致（api_push dry-run 0 差异）。
