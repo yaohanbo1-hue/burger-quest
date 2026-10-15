@@ -9,16 +9,39 @@ description = "Burger Quest · 麦门异世界 —— 基于麦当劳中国官�
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+keywords = ["mcp", "mcdonalds", "burger-quest", "ai-agent", "game", "skill"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment",
+]
+# 运行时依赖：引擎核心（解析/规划/文案/卡片）零第三方依赖；
+# 仅真实 MCP 模式需要官方 mcp SDK（Streamable HTTP 客户端）。
 dependencies = ["mcp>=1.2.0"]
 
 [project.optional-dependencies]
+# 测试依赖（CI 与本地开发）：pip install -e ".[dev]"
 dev = ["pytest>=8.0"]
 
 [project.scripts]
 burger-quest = "burger_quest.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/yaohanbo1-hue/burger-quest"
+Repository = "https://github.com/yaohanbo1-hue/burger-quest"
+Issues = "https://github.com/yaohanbo1-hue/burger-quest/issues"
+
 [tool.setuptools.packages.find]
 include = ["burger_quest*"]
+
+# 演示数据随包分发：pip install 后 demo 模式仍可离线运行
+[tool.setuptools.package-data]
+burger_quest = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

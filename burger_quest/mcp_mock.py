@@ -1,14 +1,11 @@
-"""演示 / 测试用 Mock 客户端：完全离线，数据来自 fixtures/demo_data.json。
+"""演示 / 测试用 Mock 客户端：完全离线，数据来自 burger_quest/data/demo_data.json。
 
-⚠️ 重要：fixtures 中的餐品、价格、优惠券均为「演示数据」，**结构与麦当劳 MCP
-真实返回保持兼容**（2026-10-13 联调实测后对齐），但绝不是实时菜单。
+⚠️ 重要：数据文件中的餐品、价格、优惠券、营养数值均为「演示数据」，
+**结构与麦当劳 MCP 真实返回保持兼容**（2026-10-13 联调实测后对齐），
+但绝不是实时菜单。
 
-与真实服务的行为对齐点（联调实测）：
-- query-meals 只返回「编码 + 分类 + 标签」，不含名称与价格；
-- 名称来自 query-meal-detail；价格只来自 calculate-price（金额单位：分）；
-- list-nutrition-foods 返回自定义分隔文本；
-- calculate-price 需要 orderType/beType，外送另需 beCode；
-- query-my-coupons 无券时返回纯文本。
+安装说明：演示数据随包分发（pyproject package-data），`pip install .`
+之后 demo 模式开箱即用，无需仓库目录在场。
 """
 from __future__ import annotations
 
@@ -32,7 +29,8 @@ from .mcp_base import (
 )
 from .models import MenuItem, PlanItem, PriceQuote
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "demo_data.json"
+# 演示数据随包分发（安装后仍可访问）
+FIXTURE_PATH = Path(__file__).resolve().parent / "data" / "demo_data.json"
 
 
 class MockMCPClient(MCPClient):

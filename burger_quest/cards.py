@@ -383,7 +383,7 @@ def render_markdown(
     lines = []
     lines.append(f"# 🍔 {PROJECT_NAME} · 任务成就卡")
     lines.append("")
-    lines.append(f"**{rpg.quest_name(constraints, option)}**")
+    lines.append(f"**{e(rpg.quest_name(constraints, option))}**")
     lines.append("")
     lines.append(f"`{NON_OFFICIAL_TAG}` · `{mode}` · `LV.{level} {tier}`")
     lines.append("")
@@ -391,7 +391,9 @@ def render_markdown(
     lines.append("")
     lines.append("## 📜 任务背景")
     lines.append("")
-    lines.append(rpg.story(constraints, store.name if store else "", demo=demo))
+    # 安全：story 含位置（用户输入）与门店名（MCP 返回），一律转义——
+    # Markdown 渲染器多数会透传内联 HTML，未转义=可注入
+    lines.append(e(rpg.story(constraints, store.name if store else "", demo=demo)))
     lines.append("")
     lines.append("## ⚔️ 推荐装备")
     lines.append("")
@@ -462,7 +464,7 @@ def render_markdown(
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append(f"- **冒险者需求**：{constraints.describe()}")
+    lines.append(f"- **冒险者需求**：{e(constraints.describe())}")
     lines.append(f"- **数据来源**：{e(source_note)}")
     lines.append(f"- **生成时间**：{e(generated_at)}")
     lines.append(f"- ⚠️ **{DISCLAIMER}**")

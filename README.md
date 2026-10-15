@@ -36,26 +36,25 @@ MVP **只生成方案，不自动下单**；`create-order` 等具有实际影响
 # 要求 Python >= 3.10
 git clone https://github.com/yaohanbo1-hue/burger-quest.git
 cd burger-quest
-pip install -r requirements.txt
+
+# 开发/测试（推荐，含 pytest）：
+pip install -e ".[dev]"
+
+# 或只装运行时（demo 演示数据随包分发，安装后离线可用）：
+pip install .
 ```
 
-引擎核心零第三方依赖；`mcp` 官方 SDK 仅真实模式需要。
+安装后有三种等价入口（演示模式完全离线，**不需要 MCP Token**）：
 
-### 4.2 成就卡预览（复古 RPG 界面 · 红黄配色 · 独立项目声明）
+```bash
+burger-quest demo "我想吃辣，预算35，外送到南山科技园，一个人"   # 控制台入口
+python -m burger_quest demo "我想吃辣，预算35"                    # 模块入口
+python -m pytest tests/ -q                                       # 测试（255 个）
+```
 
-分享卡为纯本地 HTML/CSS 实现（无外部 CDN / 字体 / 图片依赖），适配手机与打印；
-明确标注 `NON-OFFICIAL FAN PROJECT` 与 `LIVE`（真实 MCP 数据）/ `DEMO`（离线演示数据）模式。
-
-| 卡片 | 数据模式 | 文件 |
-| --- | --- | --- |
-| 辣味外送成就卡 | DEMO | [demo_spicy.html](examples/cards/demo_spicy.html) · [demo_spicy.md](examples/cards/demo_spicy.md) · [预览图](examples/cards/demo_spicy.png) |
-| 多人丰盛成就卡 | DEMO | [demo_share.html](examples/cards/demo_share.html) · [demo_share.md](examples/cards/demo_share.md) |
-| 低卡轻食成就卡 | DEMO | [demo_light.html](examples/cards/demo_light.html) · [demo_light.md](examples/cards/demo_light.md) |
-| 真实 MCP 成就卡 | **LIVE** | [live_real.html](examples/cards/live_real.html) · [live_real.md](examples/cards/live_real.md) · [预览图](examples/cards/live_real.png) |
-
-卡片诚实性设计：总价只认 `calculate-price` 权威结果（未核验显示「未知」）；营养信息只在官方
-返回真实数据时展示，缺失明确显示「未知」而非装饰数字（见 LIVE 示例卡的属性面板）；
-每件装备标注商品编码与数据来源，可回溯核查。
+依赖分层（单一事实来源 `pyproject.toml`）：运行时仅 `mcp>=1.2.0`（官方 SDK，**仅真实 MCP 模式需要**；
+引擎核心解析/规划/文案/卡片零第三方依赖）；测试依赖 `pytest>=8.0`（`dev` extra）。
+`requirements.txt` 不再重复罗列，避免两边漂移。
 
 ## 4. 快速开始
 
@@ -84,7 +83,7 @@ python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园�
   剩余预算：¥8.00
 ```
 
-> ⚠️ 演示模式使用 `fixtures/demo_data.json` 中的**演示数据**（结构与 MCP 返回兼容，数值非实时），用于离线体验与自动化测试。
+> ⚠️ 演示模式使用包内 `burger_quest/data/demo_data.json` 的**演示数据**（随包分发，安装后离线可用）（结构与 MCP 返回兼容，数值非实时），用于离线体验与自动化测试。
 
 ### 4.2 真实模式（调用麦当劳 MCP）
 
@@ -114,7 +113,7 @@ python -m burger_quest stores "南山科技园"
 python -m burger_quest quest "我想吃辣，预算35" --store-code <编码>
 ```
 
-> ⚠️ `DEMO-001` / `DEMO-002` 只存在于演示数据（fixtures），真实模式使用会查询失败；真实门店编码请用 `stores` 子命令获取。
+> ⚠️ `DEMO-001` / `DEMO-002` 只存在于演示数据（包内 data/demo_data.json），真实模式使用会查询失败；真实门店编码请用 `stores` 子命令获取。
 
 **只读冒烟测试**（验证连接 / 工具发现 / 关键查询，不调用任何写操作）：
 
@@ -134,6 +133,22 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 > 「用麦门异世界帮我规划：预算 40，想吃辣，外送到南山科技园」
 
 详细用法见 [skill.md](skill.md) 与 [MCP_INTEGRATION.md](MCP_INTEGRATION.md)。
+
+### 4.4 成就卡预览（复古 RPG 界面 · 红黄配色 · 独立项目声明）
+
+分享卡为纯本地 HTML/CSS 实现（无外部 CDN / 字体 / 图片依赖），适配手机与打印；
+明确标注 `NON-OFFICIAL FAN PROJECT` 与 `LIVE`（真实 MCP 数据）/ `DEMO`（离线演示数据）模式。
+
+| 卡片 | 数据模式 | 文件 |
+| --- | --- | --- |
+| 辣味外送成就卡 | DEMO | [demo_spicy.html](examples/cards/demo_spicy.html) · [demo_spicy.md](examples/cards/demo_spicy.md) · [预览图](examples/cards/demo_spicy.png) |
+| 多人丰盛成就卡 | DEMO | [demo_share.html](examples/cards/demo_share.html) · [demo_share.md](examples/cards/demo_share.md) |
+| 低卡轻食成就卡 | DEMO | [demo_light.html](examples/cards/demo_light.html) · [demo_light.md](examples/cards/demo_light.md) |
+| 真实 MCP 成就卡 | **LIVE** | [live_real.html](examples/cards/live_real.html) · [live_real.md](examples/cards/live_real.md) · [预览图](examples/cards/live_real.png) |
+
+卡片诚实性设计：总价只认 `calculate-price` 权威结果（未核验显示「未知」）；营养信息只在官方
+返回真实数据时展示，缺失明确显示「未知」而非装饰数字（见 LIVE 示例卡的属性面板）；
+每件装备标注商品编码与数据来源，可回溯核查。
 
 ## 5. 使用示例
 
@@ -186,7 +201,7 @@ python -m pytest tests/ -v
 
 > 说明：测试中的「真实模式」用假会话验证引擎链路，**不访问麦当劳服务器**；真实服务器的联调实测记录见 MCP_INTEGRATION.md。
 
-## 6.5 已知限制（透明声明）
+## 7. 已知限制（透明声明）
 
 **已于 2026-10-13 用官方 Token 实测验证**（详见 MCP_INTEGRATION.md §3.5）：
 - 网络链路、`mcp` SDK 1.27.2 双版本兼容、401/429 状态码还原；
@@ -198,7 +213,7 @@ python -m pytest tests/ -v
 - 外送全链路（需要账户已保存配送地址）；
 - `query-meal-detail` 的特制选项（modification）与套餐换选项——MVP 不展示，接口已预留。
 
-## 7. 架构（分层）
+## 8. 架构（分层）
 
 ```
 用户一句话
@@ -209,7 +224,7 @@ nlparser.py     自然语言解析：预算/口味/营养偏好/门店/用餐方
    ▼
 mcp_base.py     MCP 客户端接口 + 防御式适配（联调实测格式：文本信封提取/菜单骨架/算价分单位）
    ├─ mcp_http.py   真实客户端（同步门面 + 后台事件循环，官方 mcp SDK）
-   └─ mcp_mock.py   演示客户端（fixtures，离线可跑）
+   └─ mcp_mock.py   演示客户端（包内演示数据，离线可跑）
    │
    ▼
 service.py      编排层（官方工具链，联调实测）：
@@ -229,14 +244,14 @@ cards.py        分享卡渲染：HTML / Markdown（含项目名 + 非官方声�
 
 **真实数据流要点**（2026-10-13 联调实测）：官方 `query-meals` 只返回餐品编码与标签，**没有名称和价格**——名称来自 `query-meal-detail`，价格只来自 `calculate-price`（金额单位为分）。服务端因此采用「短名单 → 详情补名 → 一次算价发现全部单价 → 组合验价」的四段式链路，所有价格均可追溯到权威工具返回。
 
-## 8. 安全与合规
+## 9. 安全与合规
 
 - **Token 不进仓库**：只从环境变量 `MCD_MCP_TOKEN` 读取；`mcp-config.example.json` 仅含占位符；`.gitignore` 显式忽略 `.env` / `mcp-config.json`；
 - **审计链路**：每次任务输出 `data_sources` 与 `mcp_calls`，可追溯每个数字的来源；
 - **无实际影响操作**：MVP 不接入下单；涉及真实资金/库存的工具（`create-order` 等）在 `TOOLS_RESERVED` 中显式预留；
 - **非官方声明**：所有输出（终端 + 卡片）均带非官方项目声明。
 
-## 9. 目录结构
+## 10. 目录结构
 
 ```
 burger-quest/
@@ -259,13 +274,13 @@ burger-quest/
 │   ├── cards.py              分享卡渲染
 │   ├── service.py            编排层（门店解析/错误处理）
 │   ├── smoke.py              只读 MCP 冒烟测试
-│   └── cli.py                命令行入口
-├── fixtures/demo_data.json   演示数据（明确标注非实时）
-├── tests/                    234 个测试
+│   ├── cli.py                命令行入口
+│   └── data/demo_data.json   演示数据（随包分发，明确标注非实时）
+├── tests/                    255 个测试
 └── examples/                 可复现演示与示例卡片
 ```
 
-## 10. 参赛信息
+## 11. 参赛信息
 
 - 比赛：麦当劳程序员创意开发大赛（<https://tch.cloud.tencent.com/contest/48>）
 - 官方 MCP 使用指南：<https://github.com/M-China/mcd-mcp-server>

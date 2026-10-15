@@ -17,6 +17,11 @@ htmlcov/
 mcp-config.json
 !mcp-config.example.json
 
+# ---- 日志 / 临时 ----
+*.log
+*.tmp
+*.bak
+
 # ---- 系统 / IDE ----
 .DS_Store
 Thumbs.db
