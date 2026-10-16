@@ -3,7 +3,7 @@
 [![CI](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/yaohanbo1-hue/burger-quest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-257%20passed-brightgreen)](#6-测试)
+[![Tests](https://img.shields.io/badge/tests-323%20passed-brightgreen)](#6-测试)
 
 > 输入预算、心情、口味和用餐偏好，RPG 游戏主持人替你从**麦当劳中国官方 MCP Server 的真实菜单**里，组出一份不超预算的点餐方案，并生成一张可以分享的任务成就卡。
 
@@ -58,12 +58,54 @@ pip install .
 ```bash
 burger-quest demo "我想吃辣，预算35，外送到南山科技园，一个人"   # 控制台入口
 python -m burger_quest demo "我想吃辣，预算35"                    # 模块入口
-python -m pytest tests/ -q                                       # 测试（255 个）
+python -m pytest tests/ -q                                       # 测试（323 个）
 ```
 
 依赖分层（单一事实来源 `pyproject.toml`）：运行时仅 `mcp>=1.2.0`（官方 SDK，**仅真实 MCP 模式需要**；
 引擎核心解析/规划/文案/卡片零第三方依赖）；测试依赖 `pytest>=8.0`（`dev` extra）。
 `requirements.txt` 不再重复罗列，避免两边漂移。
+
+### 3.1 Windows 用户（PowerShell）
+
+要求 Windows 10/11 + Python 3.11 或 3.12（也兼容 3.10/3.13；安装时勾选 *Add to PATH*）。
+
+**一键安装**（幂等，可重复执行；自动创建 `.venv`、装依赖、引导配置 Token）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
+# 只装运行时（不装 pytest）：加 -SkipDev
+# 强制重建虚拟环境：加 -RecreateVenv
+```
+
+**日常使用**（自动用 `.venv`，无需手动激活）：
+
+```powershell
+powershell -File scripts\run-windows.ps1 demo "我想吃辣，预算35"              # 离线演示（无需 Token）
+powershell -File scripts\run-windows.ps1 quest "我想吃辣，预算35，到店自取"    # 真实模式（需 Token）
+powershell -File scripts\check-mcp-windows.ps1                                # 真实连接诊断
+```
+
+也可以激活虚拟环境后直接用命令：`.\ .venv\Scripts\Activate.ps1`，然后 `burger-quest --help`。
+
+**Token 配置**（真实模式必需，三种方式按安全级排序）：
+
+1. **仅当前 PowerShell 进程**（最安全，关窗口即失效）：
+   ```powershell
+   $env:MCD_MCP_TOKEN = "你的Token"
+   ```
+2. **`.env` 文件**（方便，明文落盘）：setup 脚本引导写入仓库根 `.env`；该文件已被 `.gitignore` 排除，**不会进 Git**。⚠️ 它是明文文件，能读你磁盘的程序都能看到；清理方式：`Remove-Item .env`。共享屏幕/远程协助时注意遮挡。
+3. 持久化到用户环境变量（`[Environment]::SetEnvironmentVariable("MCD_MCP_TOKEN", $token, "User")`）会写入注册表——请自行评估风险。**切勿**把 Token 写进源码、提交 Git 或粘贴进聊天窗口。
+
+**连接诊断**（真实 MCP 不可用时先跑这个，逐步 PASS/FAIL + 下一步建议）：
+
+```powershell
+powershell -File scripts\check-mcp-windows.ps1
+# 等价 CLI： burger-quest doctor
+```
+
+诊断依次检查：Python 版本 → 官方 mcp SDK → `MCD_MCP_TOKEN` 存在性（只查存在性，**绝不打印值**）→ 网络可达 → MCP 初始化 → 工具发现 → 一次只读调用；失败分类 `TOKEN_MISSING / 401 / 403 / 429 / NETWORK / SDK / TOOL_MISSING / BUSINESS`，退出码 0=全过 / 1=有失败 / 2=配置错误。**缺 Token 直接失败，不会偷偷切换演示数据。**
+
+> Windows 脚本细节：UTF-8 BOM（PowerShell 5.1 无 BOM 会把中文脚本按 ANSI 解析成乱码/语法错误）、控制台编码头（`[Console]::OutputEncoding=UTF8` + `PYTHONIOENCODING=utf-8`，避免子进程中文输出乱码）、幂等设计（复用 `.venv`、不覆盖已有 `.env`）、Token 全程不回显不落日志——这些不变量由 `tests/test_windows_scripts.py` 与 CI 的 `windows-latest` job 守护。
 
 ## 4. 快速开始
 
@@ -213,7 +255,7 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 python -m pytest tests/ -v
 ```
 
-257 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）。
+323 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）。
 
 ### MCP 调用效率（2026-10-14 实测，优化前后对比）
 
@@ -352,7 +394,7 @@ burger-quest/
 │   ├── smoke.py              只读 MCP 冒烟测试
 │   ├── cli.py                命令行入口
 │   └── data/demo_data.json   演示数据（随包分发，明确标注非实时）
-├── tests/                    257 个测试
+├── tests/                    323 个测试
 └── examples/                 可复现演示与示例卡片
 ```
 

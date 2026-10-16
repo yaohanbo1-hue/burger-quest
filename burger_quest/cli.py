@@ -207,6 +207,7 @@ def main(argv=None) -> int:
             '  python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest stores "南山科技园"\n'
+            "  python -m burger_quest doctor              # 真实连接诊断（需 Token）\n"
             "  python -m burger_quest smoke --demo\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -289,6 +290,20 @@ def main(argv=None) -> int:
     p_smoke.add_argument("--demo", action="store_true", help="离线演示模式：使用内置演示数据（无需 Token，可重复执行）")
     p_smoke.add_argument("--json", default=None, help="冒烟结果 JSON 输出路径")
 
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="真实 MCP 连接诊断：Python/依赖/Token/网络/初始化/工具发现/只读调用（缺 Token 直接失败，不回退 Demo）",
+        description=(
+            "真实 MCP 连接诊断（只读）：依次检查 Python 版本 -> 官方 mcp SDK -> MCD_MCP_TOKEN 存在性\n"
+            "-> 网络可达 -> MCP 初始化 -> 工具发现 -> 一次只读工具调用。每步 PASS/FAIL +\n"
+            "原因 + 下一步建议；失败分类：TOKEN_MISSING / 401 / 403 / 429 / NETWORK / SDK /\n"
+            "TOOL_MISSING / BUSINESS。Token 只查存在性，绝不打印值。\n"
+            "退出码：0=全部通过；1=有失败；2=配置错误（缺 Token/缺 SDK/Python 版本不符）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_doctor.add_argument("--json", default=None, help="诊断结果 JSON 输出路径（不含任何敏感值）")
+
     sub.add_parser("tools", help="列出引擎实际调用的 MCP 工具")
 
     args = parser.parse_args(argv)
@@ -316,6 +331,14 @@ def main(argv=None) -> int:
         if args.json:
             argv += ["--json", str(args.json)]
         return smoke.main(argv)
+
+    if args.cmd == "doctor":
+        from . import doctor
+
+        argv = []
+        if args.json:
+            argv += ["--json", str(args.json)]
+        return doctor.main(argv)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

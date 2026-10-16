@@ -118,7 +118,7 @@ def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -
         return MCPError(
             tool,
             "MCP Token 无效或已过期（401）：请到 https://open.mcd.cn/mcp 重新申请，"
-            "并更新环境变量 MCD_MCP_TOKEN",
+            "并更新环境变量 MCD_MCP_TOKEN 或 .env 文件中的值",
             401,
         )
     if http_status == 429 or "429" in str(e):
@@ -173,12 +173,19 @@ class HttpMCPClient(MCPClient):
 
     def __init__(self, token: Optional[str] = None, url: str = MCD_MCP_URL, timeout: float = DEFAULT_TIMEOUT):
         super().__init__()
+        # Token 解析优先级：显式参数 > 进程环境变量 > .env 文件（只读补缺，不覆盖环境变量）。
+        # .env 支持让 Windows 用户免每次设环境变量；文件须被 .gitignore 排除（已配置），
+        # 绝不要求把 Token 写进源码或提交到 Git。Token 值全程不打印、不进审计。
+        from .dotenv import load_dotenv
+
+        self.dotenv_applied = load_dotenv()
         self.token = token or os.environ.get("MCD_MCP_TOKEN")
         if not self.token:
             raise MCPError(
                 "mcd-mcp",
                 "未检测到 MCD_MCP_TOKEN。请先到 https://open.mcd.cn/mcp 申请 MCP Token，"
-                "并以环境变量方式提供（不要把 Token 写进代码或提交到仓库）。"
+                "并以环境变量方式提供（不要把 Token 写进代码或提交到仓库）；"
+                "Windows 用户也可放入仓库根目录的 .env 文件（该文件已被 .gitignore 排除）。"
                 "如需离线体验请使用 demo 子命令——真实模式不会自动切换到演示数据。",
                 code=401,
             )

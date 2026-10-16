@@ -12,6 +12,8 @@ htmlcov/
 
 # ---- 敏感信息（永不提交）----
 .env
+.env.*
+!.env.example
 *.token
 *_token.txt
 mcp-config.json

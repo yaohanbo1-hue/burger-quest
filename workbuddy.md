@@ -280,3 +280,21 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 **阶段 5 · 验证**：291 测试全绿（263+28：smoke 回退 1、审计边界 24、外送分支 3、营养 3 减
    去既有 3 项重命名…实际新增 28）；8 场景演示；smoke --demo exit 0；diff --check 干净；
    Token 扫描 0；CONTEST_DECLARATION 未动。
+
+## 5.17 Windows 真实 MCP 连接打通（2026-10-16）
+
+目标：普通 Windows 用户能真实连接麦当劳 MCP（不接受离线 Demo 代替）。
+
+**新增能力**：
+1. `burger_quest/dotenv.py`：零依赖安全 .env 加载器——只读补缺（不覆盖进程环境变量）、向上最多 3 层搜索、宽容解析、绝不写文件；Token 解析链：显式参数 > 进程环境变量 > .env；
+2. `burger_quest/doctor.py` + CLI `doctor` 子命令：八步连接诊断（Python → SDK → Token 存在性（不打印值）→ 网络 TCP → MCP 初始化 → 工具发现 → 只读调用），每步 PASS/FAIL + 原因 + 下一步建议；失败分类 TOKEN_MISSING/401/403/429/NETWORK/SDK/TOOL_MISSING/BUSINESS；退出码 0/1/2（401 归配置类）；缺 Token 直接失败，绝不切 Demo；
+3. `scripts/setup-windows.ps1`（幂等安装 + Token 三方式引导：进程环境变量优先、.env 可选持久化并披露明文风险与清理方式、SecureString 不回显）、`scripts/run-windows.ps1`（透传入口，无 Token 明确提示不切 Demo）、`scripts/check-mcp-windows.ps1`（跑 doctor）；
+4. CI 增加 `windows-latest` job（Python 3.11/3.12）：PS 解析器语法检查 + BOM 断言 + setup 无 Token 管道路径 + doctor 缺 Token exit 2 + CLI/离线演示。
+
+**Windows 实测（本机，PowerShell 5.1）**：
+- setup 首跑 exit 0（建 venv/装依赖/验证 CLI）；幂等重跑 exit 0（复用 .venv）；无 Token 管道路径 exit 0（跳过配置并警告）；.env 写入分支由单测覆盖（交互式输入不宜自动化）；
+- check-mcp 无 Token exit 2；run-windows demo exit 0；quest 无 Token exit 2 不回退；
+- doctor 有 Token 真实 7 步全过 exit 0（真实 MCP：35 工具/now-time-info 返回服务器时间）；
+- **踩坑修复 4 个**：① PS 5.1 无 BOM 的 UTF-8 中文脚本按 ANSI 解析成语法错误 → 三脚本加 UTF-8 BOM（测试守卫）；② 内联 Python 检查的中文被代码页搞乱 → 改 ASCII；③ 子进程中文输出经 GBK 管道双重转码 → 脚本加控制台 UTF-8 编码头（真实控制台显示正确；工具捕获层乱码是管道 artifact，字节级已验证子进程输出合法 UTF-8）；④ CmdletBinding 属性前不能有语句 → 编码头移到 param 块后。
+
+**测试 291 → 323**（test_dotenv 7 + test_doctor 11 + test_windows_scripts 10 + CLI 接线等）；真实 MCP 只读验证：doctor 7 步全过（smoke 8/8 在深度审计轮已验证）。
