@@ -121,7 +121,10 @@ def test_extract_product_prices_and_names():
             ],
         }
     )
-    assert mb.extract_product_prices(q) == {"1440": 4500, "4810": 1250}
+    # subtotal 是「行小计」（官方语义）：quantity=2 的 4500 归一为单价 2250，
+    # 防止把 2 件小计当成单价高估（2026-10-16 审计修正的语义，
+    # 旧断言把行小计当单价是错的）；quantity=1 时两者等价。
+    assert mb.extract_product_prices(q) == {"1440": 2250, "4810": 1250}
     assert mb.extract_product_names(q) == {"1440": "麦辣鸡腿汉堡", "4810": "中薯条"}
 
 

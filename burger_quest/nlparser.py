@@ -144,13 +144,21 @@ STORE_NAME_PAT = re.compile(
 )
 LOCATION_PATTERNS = [
     re.compile(r"(?:送到|送至|配送|外卖)(?:到|至)?\s*([^，。,.!！?？;；\s]{2,20})"),
-    re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*(?:的?麦当劳|吃|点|下单|取餐)"),
+    re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*(?:的?麦当劳|吃|点|下单|取餐|自取|堂食|外带|打包|配送|外卖)"),
+    # 「在X，<任意后续从句>」：位置后是逗号即认（2026-10-16 审计修复「在X，到店自取/想吃辣」假否定）。
+    # 过捕获守卫见 _clean_location 的 COMMA_CAPTURE_BANNED——「我在想美食，去吃」必须拒。
+    re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*[，,]"),
     # 句尾位置：「……，在深圳市南山区科技园」（2026-10-14 补充：尾部「在X」）
     re.compile(r"(?:在|于)\s*([^，。,.!！?？;；\s]{2,20})\s*$"),
     re.compile(r"附近\s*([^，。,.!！?？;；\s]{2,20})"),
     # 「X附近」：「科技园附近」「中关村附近」（2026-10-14 补充：位置在「附近」前）
     re.compile(r"([^，。,.!！?？;；\s]{2,20})\s*附近"),
 ]
+# 逗号模式专用守卫：捕获里含这些动词说明「在X」其实是句子的其他成分（「我在想美食，去吃」）
+COMMA_CAPTURE_BANNED = ("想", "要", "吃", "喝")
+
+# 尾部位置可能把用餐方式吞进来（「在深圳市南山区科技园到店自取」）——清洗时剥掉（长者优先）
+LOCATION_TAIL_DINING = ("到店自取", "到店吃", "店里吃", "自取", "堂食", "外带", "打包", "下单", "取餐", "配送", "外卖", "到店")
 
 # 常见语气词/停用字，位置名词里去掉
 LOCATION_STOP = ("麦当劳", "麦门", "门店", "餐厅", "店铺", "附近", "这里", "那边", "店里", "甜品站", "麦咖啡")
@@ -163,6 +171,14 @@ LOCATION_REJECT = ("千卡", "大卡", "kcal", "卡路里", "蛋白质", "蛋白
 def _clean_location(loc: str) -> Optional[str]:
     """清洗并校验位置片段；不合格返回 None（数字开头/含营养单位/过短/疑问词）。"""
     loc = loc.strip().strip("的了呀吧呢")
+    # 尾部吞入的用餐方式词剥掉（「深圳市南山区科技园到店自取」->「深圳市南山区科技园」）
+    changed = True
+    while changed:
+        changed = False
+        for word in LOCATION_TAIL_DINING:
+            if loc.endswith(word) and len(loc) > len(word) + 1:
+                loc = loc[: -len(word)]
+                changed = True
     for stop in LOCATION_STOP:
         loc = loc.replace(stop, "")
     loc = loc.strip()
@@ -352,10 +368,15 @@ def parse_location(text: str) -> tuple[Optional[str], Optional[str]]:
             return loc, "门店名称"
     for pat in LOCATION_PATTERNS:
         m = pat.search(text)
-        if m:
-            loc = _clean_location(m.group(1))
-            if loc:
-                return loc, "位置表述"
+        if not m:
+            continue
+        raw = m.group(1)
+        # 逗号模式守卫：「在X，…」的 X 含想/要/吃/喝 时是句子其他成分（「我在想美食，去吃」）
+        if pat is LOCATION_PATTERNS[2] and any(w in raw for w in COMMA_CAPTURE_BANNED):
+            continue
+        loc = _clean_location(raw)
+        if loc:
+            return loc, "位置表述"
     return None, None
 
 

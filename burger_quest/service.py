@@ -193,6 +193,95 @@ def _shortlist(menu: list[MenuItem], c: Constraints) -> list[MenuItem]:
     return picked[:SHORTLIST_MAX]
 
 
+# 价格发现的坏商品隔离降级（2026-10-16 审计新增）
+# 背景：一次 calculate-price 传全部短名单时，个别商品被官方整单拒绝
+#（失效编码/区域售罄等）会让整个探测失败——一个坏编码不该废掉整个任务。
+# 策略：全量（1 次）-> 错误指向商品时二分两批（+2 次）-> 失败批逐个（+≤10 次）。
+# 硬上限 PRICE_DISCOVERY_MAX_CALLS 次算价调用；所有成功结果仍来自官方权威返回，
+# 被排除的商品如实记入 warnings（不编造价格、不静默丢弃）。
+PRICE_DISCOVERY_MAX_CALLS = 13
+_ITEM_ERROR_HINTS = ("商品", "不存在", "下架", "售罄", "售完", "停售", "meal", "product")
+# 认证/网络/协议类错误优先判负：这些形态拆分重试没有意义（2026-10-16 审计：
+# 「MCP Token 无效或已过期（401）」含「无效」二字，曾被误分类为商品错误）
+_NON_ITEM_ERROR_HINTS = (
+    "401", "403", "token", "授权", "认证", "登录", "过期",
+    "连接", "网络", "超时", "timeout", "unreachable", "reset", "closed", "ssl", "resolve",
+    "isError", "协议", "unknown tool",
+)
+
+
+def _probe_prices(scene, client: MCPClient, items: list[MenuItem]):
+    """对 items 各 1 件做一次算价探测。返回 (quote or None, 错误消息)。"""
+    try:
+        quote = client.calculate_price(
+            scene, [PlanItem(m, 1) for m in items], [], purpose="price_discovery"
+        )
+        if quote.ok:
+            return quote, ""
+        return quote, quote.message or "calculate-price 未返回应付总价"
+    except MCPError as e:
+        return None, str(e)
+
+
+def _looks_like_item_error(err: str) -> bool:
+    """错误是否指向商品本身（值得拆分排查）；认证/网络/协议/结构错误不拆分。"""
+    if not err:
+        return False
+    low = err.lower()
+    if any(h in low for h in _NON_ITEM_ERROR_HINTS):
+        return False
+    return any(h in low for h in _ITEM_ERROR_HINTS)
+
+
+def _discover_prices(scene, client: MCPClient, shortlist: list[MenuItem], result: QuestResult):
+    """价格发现（名称+单价一次拿），含坏商品隔离降级。
+
+    返回 (unit_prices, price_names, excluded_codes)。
+    非商品指向的失败原样抛 MCPError（上层按「价格查询失败」处理）。
+    """
+    calls = 0
+    quote, err = _probe_prices(scene, client, shortlist)
+    calls += 1
+    if quote is not None and quote.ok:
+        return extract_product_prices(quote), extract_product_names(quote), ()
+    if not _looks_like_item_error(err):
+        raise MCPError("calculate-price", err or "calculate-price 未返回应付总价")
+
+    # 降级：二分两批 -> 失败批逐个（调用数硬上限内）
+    prices: dict[str, int] = {}
+    names: dict[str, str] = {}
+    excluded: list[str] = []
+    mid = max(1, len(shortlist) // 2)
+    for batch in (shortlist[:mid], shortlist[mid:]):
+        if not batch:
+            continue
+        q, _e = _probe_prices(scene, client, batch)
+        calls += 1
+        if q is not None and q.ok:
+            prices.update(extract_product_prices(q))
+            names.update(extract_product_names(q))
+            continue
+        for m in batch:
+            if calls >= PRICE_DISCOVERY_MAX_CALLS:
+                excluded.append(m.code)  # 达上限：保守排除并如实记录
+                continue
+            q3, _e3 = _probe_prices(scene, client, [m])
+            calls += 1
+            if q3 is not None and q3.ok:
+                prices.update(extract_product_prices(q3))
+                names.update(extract_product_names(q3))
+            else:
+                excluded.append(m.code)
+    if excluded:
+        result.warnings.append(
+            f"{len(excluded)} 个商品导致整单算价失败，已自动排查并排除（未编造价格）：{', '.join(excluded)}"
+        )
+        result.warnings.append(
+            f"价格发现启用了坏商品隔离降级（算价调用 {calls} 次，上限 {PRICE_DISCOVERY_MAX_CALLS} 次）"
+        )
+    return prices, names, tuple(excluded)
+
+
 def run_quest(
     text: str,
     client: MCPClient,
@@ -241,26 +330,26 @@ def run_quest(
     # 现在：先对短名单算价（1 次），calculate-price 的 productList 自带 productName
     # 与 subtotal（官方权威返回），只有 productList 没给名称的商品才回退查详情
     # （实测通常 0 次）。总调用从 ≤11 次降到 1-3 次，且名称/价格仍全部来自官方。
+    # 2026-10-16 审计补充：全量探测若因个别商品被官方整单拒绝（失效编码/售罄），
+    # 走有界降级（二分 -> 失败批逐个）隔离坏商品，不让一个坏编码废掉整个任务。
     shortlist = _shortlist(skeleton, c)
     try:
-        probe = client.calculate_price(scene, [PlanItem(m, 1) for m in shortlist], [], purpose="price_discovery")
+        unit_prices, price_names, excluded = _discover_prices(scene, client, shortlist, result)
     except MCPError as e:
         result.warnings.append(
             f"价格查询失败：{e}；没有权威价格就无法生成方案（未编造任何价格）"
         )
         return result
-    if not probe.ok:
-        result.warnings.append(
-            f"价格查询失败：{probe.message or 'calculate-price 未返回应付总价'}；无法生成方案（未编造任何价格）"
-        )
+    if not unit_prices:
+        result.warnings.append("没有获取到任何真实价格，无法生成方案（未编造任何价格）")
         return result
-    unit_prices = extract_product_prices(probe)
-    price_names = extract_product_names(probe)
 
     named: list[MenuItem] = []
     detail_failures = 0
     detail_skipped = 0
     for m in shortlist:
+        if m.code in excluded:
+            continue  # 坏商品已被隔离排除，不再回退查详情（省调用、不引入无价商品）
         name = price_names.get(m.code) or ""
         if not name:
             # productList 没给名称：回退 query-meal-detail（不猜名称）
@@ -290,10 +379,16 @@ def run_quest(
     # 5. 价格汇总：单品实付来自同一次算价的 productList.subtotal（权威，非估算）
     priced: list[MenuItem] = []
     unpriced = 0
+    non_positive = 0
     for m in named:
         cents = unit_prices.get(m.code)
         if cents is None:
             unpriced += 1
+            continue
+        if cents <= 0:
+            # 0 或负价不是有效权威价格（2026-10-16 审计：0 元商品会免费进组合、
+            # 负价会虚增预算空间）——按「价格未知」处理，排除且明示
+            non_positive += 1
             continue
         priced.append(
             MenuItem(
@@ -306,6 +401,10 @@ def run_quest(
         )
     if unpriced:
         result.warnings.append(f"{unpriced} 个餐品未返回真实价格，已从组合中排除（而不是估算价格）")
+    if non_positive:
+        result.warnings.append(
+            f"{non_positive} 个餐品返回了非正价格（0 或负数），已按价格未知排除——不用可疑价格规划"
+        )
     if not priced:
         result.warnings.append("没有获取到任何真实价格，无法生成方案")
         return result

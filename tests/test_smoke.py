@@ -14,7 +14,7 @@ import pytest
 from burger_quest.mcp_base import MCPError
 from burger_quest.mcp_http import HttpMCPClient
 from burger_quest.smoke import READONLY_TOOLS, run_smoke
-from test_http_client import make_client
+from test_http_client import fake_tools, make_client, wrap_api_text
 
 from burger_quest import cli, smoke
 
@@ -192,3 +192,72 @@ def test_smoke_json_output(tmp_path, capsys):
     assert payload["passed"] is True
     assert len(payload["steps"]) == 8
     assert payload["mode"].startswith("demo")
+
+
+# ---------------------------------------------------------------- 候选门店回退（2026-10-16 审计新增）
+
+
+class _StoreRoutingSession:
+    """按 storeCode 路由的假会话：第一家门店菜单报业务错误（打烊），第二家正常。"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def initialize(self):
+        return None
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        if name == "query-meals" and arguments.get("storeCode") == "1111111":
+            # 首家门店打烊：官方业务错误信封（联调实测形态 code=600057）
+            payload = {"success": False, "code": 600057, "message": "门店可能已关闭或不在营业时间", "data": None}
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text=wrap_api_text(payload))])
+        payload = SMOKE_RESPONSES.get(name, {"success": True, "code": 200, "data": {}})
+        return types.SimpleNamespace(content=[types.SimpleNamespace(text=wrap_api_text(payload))])
+
+    async def list_tools(self):
+        return types.SimpleNamespace(tools=fake_tools())
+
+
+def _client_with_closed_first_store():
+    client = HttpMCPClient(token="test-token-not-real", timeout=10)
+    session = _StoreRoutingSession()
+    # 附近门店返回两家：1111111（打烊）+ 1420762（正常）
+    stores_resp = {
+        "success": True,
+        "code": 200,
+        "data": [
+            {"storeCode": "1111111", "storeName": "已打烊门店", "address": "某路1号", "distance": 100, "businessStatus": False},
+            {"storeCode": "1420762", "storeName": "营业中门店", "address": "某路2号", "distance": 200, "businessStatus": True},
+        ],
+    }
+    session.call_tool_orig = session.call_tool
+
+    async def routing_call_tool(name, arguments):
+        if name == "query-nearby-stores":
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text=wrap_api_text(stores_resp))])
+        return await session.call_tool_orig(name, arguments)
+
+    session.call_tool = routing_call_tool
+
+    async def fake_open(self):
+        self._session = session
+
+    client._open_session = types.MethodType(fake_open, client)
+    client._check_sdk = types.MethodType(lambda self: None, client)
+    return client, session
+
+
+def test_smoke_falls_back_to_next_store_when_first_closed():
+    """首家门店打烊（业务错误）时，冒烟有界回退到下一家候选门店（2026-10-16 实测场景）。"""
+    from burger_quest.smoke import run_smoke
+
+    client, session = _client_with_closed_first_store()
+    report = run_smoke(client, location="深圳市南山区科技园")
+    meals_step = next(s for s in report.steps if s["step"] == "query-meals")
+    assert meals_step["ok"], f"应回退到第二家门店成功: {meals_step['detail']}"
+    assert "1420762" in meals_step["detail"]
+    assert "回退" in meals_step["detail"]  # 明示发生了回退
+    # 调用有界：query-meals 最多 3 次（首家失败 + 第二家成功 = 2 次）
+    meals_calls = [c for c in session.calls if c[0] == "query-meals"]
+    assert len(meals_calls) == 2

@@ -117,6 +117,7 @@ def run_smoke(client: MCPClient, location: str = DEFAULT_LOCATION, store_code: s
 
     # 4. 门店：--store-code 直达；否则按位置查询（多候选时冒烟取第一家并明示）
     scene = None
+    store_candidates: list = []  # 候选门店（菜单失败时有界回退，如打烊）
     try:
         if store_code:
             scene = scene_for_mode("takeaway", store_code)
@@ -127,6 +128,7 @@ def run_smoke(client: MCPClient, location: str = DEFAULT_LOCATION, store_code: s
             if not stores:
                 report.add("query-nearby-stores", False, f"「{location}」未返回门店（换 --location 或 --store-code 重试）")
             else:
+                store_candidates = list(stores)
                 scene = scene_for_mode("takeaway", stores[0].code)
                 if len(stores) > 1:
                     report.add(
@@ -140,17 +142,33 @@ def run_smoke(client: MCPClient, location: str = DEFAULT_LOCATION, store_code: s
     except MCPError as e:
         report.add("query-nearby-stores", False, str(e))
 
-    # 5. 菜单骨架
+    # 5. 菜单骨架（候选门店有界回退：首家可能打烊/停止营业，最多再试 2 家）
     menu = []
     if scene is not None:
-        try:
-            menu = client.query_meals(scene)
-            if menu:
-                report.add("query-meals", True, f"门店 {scene.store_code} 返回 {len(menu)} 个餐品编码")
-            else:
-                report.add("query-meals", False, f"门店 {scene.store_code} 未返回任何餐品")
-        except MCPError as e:
-            report.add("query-meals", False, str(e))
+        attempts = [scene] + [
+            scene_for_mode("takeaway", s.code) for s in store_candidates[1:3]
+        ] if store_candidates else [scene]
+        tried: list[str] = []
+        last_error = ""
+        for attempt_scene in attempts:
+            if attempt_scene.store_code in tried:
+                continue
+            tried.append(attempt_scene.store_code)
+            try:
+                menu = client.query_meals(attempt_scene)
+                if menu:
+                    scene = attempt_scene
+                    note = f"门店 {scene.store_code} 返回 {len(menu)} 个餐品编码"
+                    if len(tried) > 1:
+                        note += f"（首家门店不可用，已回退到第 {len(tried)} 家候选）"
+                    report.add("query-meals", True, note)
+                    break
+                last_error = f"门店 {attempt_scene.store_code} 未返回任何餐品"
+            except MCPError as e:
+                last_error = str(e)
+                continue
+        else:
+            report.add("query-meals", False, last_error or "候选门店均未返回菜单")
     else:
         report.add("query-meals", False, "上一步未确定门店场景，跳过（不编造菜单）")
 

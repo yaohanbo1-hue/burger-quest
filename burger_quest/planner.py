@@ -131,13 +131,20 @@ def mood_score(item: MenuItem, mood: Optional[str]) -> int:
 
 
 def nutrition_of(item: MenuItem, nutrition: list[NutritionItem]) -> Optional[NutritionItem]:
+    """按名称**精确匹配**营养数据（2026-10-16 审计移除了子串回退）。
+
+    移除原因（实测）：
+    - 子串回退会把「麦辣鸡腿堡套餐」匹配到「麦辣鸡腿堡」的单品营养
+      （演示数据中仅存这 2 个错误映射），套餐与单品的热量/蛋白质不同，
+      会得出虚假的低卡/高蛋白结论；
+    - 真实数据上子串回退零收益：当前促销菜单餐品（龙焰鸡腿堡三件套等）
+      在 160 条营养库中精确匹配 0 个、子串可匹配也是 0 个；
+    - 匹配不到就如实标注「未知」——宁缺毋假。
+    """
     if not nutrition:
         return None
     for n in nutrition:
         if n.name == item.name:
-            return n
-    for n in nutrition:
-        if n.name and (n.name in item.name or item.name in n.name):
             return n
     return None
 
@@ -366,6 +373,12 @@ def coupon_applies(coupon: Coupon, combo: list[PlanItem], estimated_original: in
 
 def coupon_sets(combo: list[PlanItem], coupons: list[Coupon], estimated_original: int) -> list[list[Coupon]]:
     """生成待验价的优惠券试探序列：最优单券 -> 最优双券（无可用券时只有无券）。
+
+    **最优性边界（2026-10-16 审计如实声明）**：本策略**不保证全局最优**——
+    只试探「预期折扣最高的单券」与「最高的两张券组合」，理论上可能存在
+    更优的第三张券或非最高折扣券的组合未被覆盖。这是调用次数（每组合 ≤2 次
+    验价）与最优性之间的显式权衡：引擎追求「预算内真实可付的较优解」，
+    而非穷举所有券组合；实际折扣一律以 calculate-price 权威核验为准。
 
     2026-10-14 效率优化（每个组合最多 3 次算价，原来最多 8 次）：
     - 有可用券时不再无条件先探「无券基线」——同餐品下无券方案严格被

@@ -592,6 +592,12 @@ def extract_product_prices(quote: PriceQuote) -> dict:
 
     用于价格发现：一次调用传入多件商品（各 1 件），从返回的 productList
     得到每件商品的 subtotal，即该商品的真实单价（分）——不是估算，是权威返回。
+
+    2026-10-16 审计加固：
+    - quantity≥2 时按「行小计 ÷ 数量」归一化为单价（防止把 2 件小计当成单价高估）；
+    - quantity≤0 的异常行跳过（除零保护）；
+    - 非正金额（0 或负）**不在此处过滤**——由调用方（service）结合语境排除并明示，
+      保持本函数「忠实提取」的单一职责。
     """
     out: dict[str, int] = {}
     if not quote.ok:
@@ -603,8 +609,16 @@ def extract_product_prices(quote: PriceQuote) -> dict:
         subtotal = _first(entry, "subtotal", "price")
         if code and subtotal not in (None, ""):
             cents = _to_cents_official(subtotal)
-            if cents is not None:
-                out[str(code)] = cents
+            if cents is None:
+                continue
+            qty_raw = _first(entry, "quantity", "qty", "count")
+            try:
+                qty = int(qty_raw) if qty_raw not in (None, "") else 1
+            except (TypeError, ValueError):
+                qty = 1
+            if qty >= 2:
+                cents = cents // qty  # 行小计归一为单价
+            out[str(code)] = cents
     return out
 
 
