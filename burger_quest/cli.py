@@ -25,10 +25,27 @@
 """
 from __future__ import annotations
 
+import sys
+
+
+def _ensure_utf8_output() -> None:
+    """把标准输出/错误切到 UTF-8（errors=replace），防止窄代码页控制台崩溃。
+
+    背景（2026-10-16 Windows CI 实测）：GitHub Actions 的 Windows runner 默认
+    cp1252 代码页，print 含 emoji（🩺/🍔/⚔️）或中文时直接
+    UnicodeEncodeError 崩溃（Linux/macOS 与本地 GBK 管道都不暴露此问题）。
+    reconfigure 后最坏情况是控制台显示替代表情，但绝不崩溃、退出码语义不变。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # Python 3.7+
+        except Exception:
+            pass
+
+
 import argparse
 import datetime
 import json
-import sys
 from pathlib import Path
 
 from . import __version__
@@ -199,6 +216,7 @@ def _cmd_stores(args) -> int:
 
 
 def main(argv=None) -> int:
+    _ensure_utf8_output()
     parser = argparse.ArgumentParser(
         prog="burger-quest",
         description="Burger Quest · 麦门异世界 —— 基于麦当劳中国官方 MCP 的游戏化点餐规划",

@@ -298,3 +298,9 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 - **踩坑修复 4 个**：① PS 5.1 无 BOM 的 UTF-8 中文脚本按 ANSI 解析成语法错误 → 三脚本加 UTF-8 BOM（测试守卫）；② 内联 Python 检查的中文被代码页搞乱 → 改 ASCII；③ 子进程中文输出经 GBK 管道双重转码 → 脚本加控制台 UTF-8 编码头（真实控制台显示正确；工具捕获层乱码是管道 artifact，字节级已验证子进程输出合法 UTF-8）；④ CmdletBinding 属性前不能有语句 → 编码头移到 param 块后。
 
 **测试 291 → 323**（test_dotenv 7 + test_doctor 11 + test_windows_scripts 10 + CLI 接线等）；真实 MCP 只读验证：doctor 7 步全过（smoke 8/8 在深度审计轮已验证）。
+
+
+**追加修复（同轮 CI 迭代）**：Windows runner cp1252 代码页使 doctor 首行 emoji 输出
+UnicodeEncodeError 崩溃（Linux 不暴露）→ cli.main() 入口 _ensure_utf8_output()
+（reconfigure UTF-8+replace），本地模拟 cp1252 验证 doctor exit 2 / demo exit 0，
+新增窄代码页回归测试；测试 323 → 324。

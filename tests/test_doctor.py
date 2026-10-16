@@ -5,6 +5,7 @@ NETWORK/SDK/TOOL_MISSING/BUSINESS）/ 全通过 / JSON 输出不含敏感值 /
 CLI 接线。用假会话驱动，不访问网络。
 """
 import json
+import sys
 import types
 
 import pytest
@@ -174,3 +175,39 @@ def test_cli_doctor_wiring(monkeypatch, capsys):
     rc = cli.main(["doctor"])
     assert rc == 2
     assert "MCD_MCP_TOKEN" in capsys.readouterr().out
+
+
+def test_cli_output_survives_narrow_codepage(monkeypatch, capsys):
+    """窄代码页（cp1252）控制台下 CLI 输出不崩溃（2026-10-16 Windows CI 实测回归）。
+
+    GitHub Windows runner 默认 cp1252，print emoji/中文会 UnicodeEncodeError；
+    main() 入口的 _ensure_utf8_output() 把标准流切到 UTF-8+replace。
+    """
+    import io
+
+    class _FakeStream(io.TextIOWrapper):
+        """模拟会抛 UnicodeEncodeError 的窄代码页流（无 reconfigure 时必崩）。"""
+
+        def __init__(self):
+            super().__init__(io.BytesIO(), encoding="cp1252")
+
+        def write(self, text):
+            # 窄代码页真实行为：当前编码无法表示的字符直接抛错
+            # （reconfigure 切到 UTF-8 后 self.encoding 随之改变，不再抛错）
+            text.encode(self.encoding)
+            return super().write(text)
+
+        def flush(self):
+            pass
+
+    fake_out, fake_err = _FakeStream(), _FakeStream()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    monkeypatch.setattr(sys, "stderr", fake_err)
+    monkeypatch.delenv("MCD_MCP_TOKEN", raising=False)
+    monkeypatch.setattr(doctor, "_check_network", lambda r: True)
+    # 不抛 UnicodeEncodeError 即通过（退出码仍为 2=缺 Token）
+    rc = cli.main(["doctor"])
+    assert rc == 2
+    # reconfigure 后流已切 UTF-8，写中文/emoji 不再抛错
+    sys.stdout.write("🩺 中文测试")
+    sys.stdout.flush()
