@@ -148,21 +148,40 @@ jobs:
         shell: pwsh
         run: |
           "3" | powershell -ExecutionPolicy Bypass -File scripts/setup-windows.ps1
-          if ($LASTEXITCODE -ne 0) { throw "setup 脚本无 Token 路径失败: $LASTEXITCODE" }
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Output "::error::setup 脚本无 Token 路径失败: $code"
+            exit 1
+          }
+          Write-Output "setup 无 Token 路径 OK"
+          exit 0
 
       # Windows 上真实诊断的缺 Token 路径：必须 exit 2 且不回退 Demo
+      # （显式捕获退出码并 exit 0/1，避免 pwsh 包装层对 $LASTEXITCODE 的语义歧义）
       - name: doctor without token fails with exit 2 (no demo fallback)
         shell: pwsh
         run: |
           $env:MCD_MCP_TOKEN = $null
           python -m burger_quest doctor
-          if ($LASTEXITCODE -ne 2) { throw "缺 Token 时应退出 2，实际: $LASTEXITCODE" }
+          $code = $LASTEXITCODE
+          if ($code -ne 2) {
+            Write-Output "::error::doctor 缺 Token 时应退出 2（配置类错误），实际: $code"
+            exit 1
+          }
+          Write-Output "doctor 缺 Token 正确退出 2（明确失败，不回退 Demo）"
+          exit 0
 
       # Windows 上 CLI 入口与离线演示（.venv 由上一步 setup 创建）
       - name: CLI entry and offline demo on Windows
         shell: pwsh
         run: |
           .\.venv\Scripts\python.exe -m burger_quest --version
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::CLI 入口失败"; exit 1 }
           .\.venv\Scripts\python.exe -m burger_quest demo "我想吃辣，预算35" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Windows 离线演示失败" }
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Output "::error::Windows 离线演示失败: $code"
+            exit 1
+          }
           Write-Host "Windows offline demo OK"
+          exit 0
