@@ -509,6 +509,7 @@ burger-quest/
 ├── MCP_INTEGRATION.md        MCP 集成说明（工具/调用链/业务价值/SDK 兼容）
 ├── PERFORMANCE.md            性能基线与回归阈值（可复现测量）
 ├── TECH_DEBT.md              技术债台账（已清偿/在账/防新增机制）
+├── ACCEPTANCE.md             候选版本总验收报告（12 项全过）
 ├── skill.md                  WorkBuddy Skill 入口
 ├── workbuddy.md              WorkBuddy 开发上下文（专项奖励材料）
 ├── mcp-config.example.json   MCP 配置模板（仅占位符）
