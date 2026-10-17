@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import inspect
 import json
 import os
@@ -85,7 +86,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from .diagnostics import log_event
 from .mcp_base import (
@@ -308,9 +309,9 @@ class HttpMCPClient(MCPClient):
         self.timeout = timeout
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self._session = None
+        self._session: Any = None  # SDK 的 ClientSession 懒加载，静态类型不可得；运行时不变量：connect() 成功后非 None
         self._stack = None
-        self._http_client = None
+        self._http_client: Any = None
         self._http_statuses: list[int] = []  # event hook 记录的 HTTP 状态码（还原 401/429）
         self._http_retry_after: Optional[float] = None  # 最近一次响应头的 Retry-After（秒）
         self._read_cache: dict[str, tuple[float, object]] = {}  # 只读查询短 TTL 缓存
@@ -374,22 +375,18 @@ class HttpMCPClient(MCPClient):
         self._http_client = None
 
         async def _close():
+            # 尽力而为清理：单项失败不得中断其余资源释放，也不得向上抛
+            # （close() 契约：幂等、安全、未连接时无操作）
             for closer in (session, stack):
                 if closer is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         await closer.__aexit__(None, None, None)
-                    except Exception:
-                        pass
             if http_client is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await http_client.aclose()
-                except Exception:
-                    pass
 
-        try:
+        with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_close(), loop).result(timeout=10)
-        except Exception:
-            pass
         loop.call_soon_threadsafe(loop.stop)
         if thread is not None:
             thread.join(timeout=5)
@@ -399,10 +396,8 @@ class HttpMCPClient(MCPClient):
         try:
             self._loop.run_forever()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self._loop.close()
-            except Exception:
-                pass
 
     @staticmethod
     def _check_sdk():
@@ -430,7 +425,7 @@ class HttpMCPClient(MCPClient):
           同时挂 event hook 记录状态码（新版 SDK 会把 401/429 包装掉，不暴露状态码）。
         """
         try:
-            params = inspect.signature(stream_client).parameters
+            params: dict[str, Any] = dict(inspect.signature(stream_client).parameters)
         except (TypeError, ValueError):
             params = {}
         if "headers" in params:
@@ -445,7 +440,9 @@ class HttpMCPClient(MCPClient):
                 ) from e
 
             async def _record_status(response):
-                try:
+                # 观测代码绝不能影响主流程：httpx event hook 内抛异常会直接搞坏客户端，
+                # 因此整体抑制（状态码记录失败不该让请求失败）
+                with contextlib.suppress(Exception):
                     self._http_statuses.append(int(response.status_code))
                     if len(self._http_statuses) > 20:
                         del self._http_statuses[:-20]
@@ -456,12 +453,10 @@ class HttpMCPClient(MCPClient):
                             self._http_retry_after = max(0.0, float(str(ra).strip()))
                         except (TypeError, ValueError):
                             self._http_retry_after = None
-                except Exception:
-                    pass
 
             # 显式连接/读取超时（2026-10-17 体检）：SDK 默认 read=5s 会提前误杀
             # 慢但正常的 calculate-price（外层等待 45s）；httpx2 无 Timeout 时放弃显式配置
-            client_kwargs = {"headers": auth_headers, "event_hooks": {"response": [_record_status]}}
+            client_kwargs: dict[str, Any] = {"headers": auth_headers, "event_hooks": {"response": [_record_status]}}
             timeout_cls = getattr(httpx2, "Timeout", None)
             if timeout_cls is not None:
                 client_kwargs["timeout"] = timeout_cls(
@@ -512,7 +507,8 @@ class HttpMCPClient(MCPClient):
     def _jittered(base: float) -> float:
         """退避抖动：50%-100% 区间（只减不增，避免叠加限流）。"""
         low, high = JITTER_RANGE
-        return base * (low + random.random() * (high - low))
+        # 抖动只需统计随机性，无需密码学强度（secrets 反而更慢）
+        return base * (low + random.random() * (high - low))  # nosec B311
 
     def _retry_backoff(self, tool: str, e: MCPError, attempts: int) -> Optional[float]:
         """决定是否重试及退避秒数；None = 不重试（直接失败）。
@@ -571,9 +567,12 @@ class HttpMCPClient(MCPClient):
         while True:
             attempts += 1
             t0 = time.perf_counter()
+            session = self._session
+            if session is None:
+                raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
             try:
                 result = self._submit(
-                    self._session.call_tool(tool, arguments),
+                    session.call_tool(tool, arguments),
                     tool=tool,
                     timeout=timeout,
                 )
@@ -719,7 +718,7 @@ class HttpMCPClient(MCPClient):
 
     def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1):
         # searchType=2 按位置搜索；city 与 keyword 至少一个（官方校验）
-        args = {"beType": be_type, "searchType": 2}
+        args: dict[str, Any] = {"beType": be_type, "searchType": 2}
         if city:
             args["city"] = city
         if keyword:

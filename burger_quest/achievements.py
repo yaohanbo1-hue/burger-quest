@@ -133,7 +133,8 @@ def run_signature(result: QuestResult) -> str:
         str(chosen.total_cents) if chosen and chosen.total_cents is not None else "",
         str(c.people),
     ]
-    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    # usedforsecurity=False：仅作去重键（相同输入相同数据只计一次），非安全用途
+    return hashlib.sha1("|".join(parts).encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def _counts(result: QuestResult) -> dict:

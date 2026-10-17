@@ -37,25 +37,34 @@ def _ensure_utf8_output() -> None:
     reconfigure 后最坏情况是控制台显示替代表情，但绝不崩溃、退出码语义不变。
     """
     for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")  # Python 3.7+
-        except Exception:
-            pass
+        # reconfigure 只存在于 TextIOWrapper；被替换/管道捕获的场景可能没有，
+        # 用 getattr 探测而非 isinstance（子类形态太多），调用失败静默跳过
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with suppress(Exception):
+                reconfigure(encoding="utf-8", errors="replace")  # Python 3.7+
 
 
 import argparse
 import datetime
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 
 from . import __version__
-from .mcp_base import MCPError, TOOLS_RESERVED, TOOLS_USED, summarize_calls
+from .mcp_base import MCPClient, MCPError, TOOLS_RESERVED, TOOLS_USED, summarize_calls
 from .models import format_yuan
 from .service import run_quest
 
 
-def _print_result(result, card_html: Path = None, card_md: Path = None, json_out: Path = None, mode: str = "quest") -> int:
+def _print_result(
+    result,
+    card_html: Path | None = None,
+    card_md: Path | None = None,
+    json_out: Path | None = None,
+    mode: str = "quest",
+) -> int:
     c = result.constraints
     print("=" * 62)
     print(f"🍔 {result.quest_name or '任务未完成'}")
@@ -182,7 +191,7 @@ def _cmd_stores(args) -> int:
         from .mcp_mock import MockMCPClient
 
         try:
-            client = MockMCPClient(fixture_path=args.fixture)
+            client: MCPClient = MockMCPClient(fixture_path=args.fixture)
         except MCPError as e:
             print(f"❌ {e}")
             return 2
@@ -509,7 +518,7 @@ def main(argv=None) -> int:
             # 演示数据不得伪装成真实 MCP 历史快照——明确提示并忽略该标记
             print("⚠️ --card-snapshot 仅适用于真实 MCP 模式（quest）；演示数据不会标注 LIVE SNAPSHOT")
         try:
-            client = MockMCPClient(fixture_path=args.fixture)
+            client: MCPClient = MockMCPClient(fixture_path=args.fixture)
         except MCPError as e:
             print(f"❌ {e}")
             return 2

@@ -3,7 +3,10 @@
 [![CI](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/yaohanbo1-hue/burger-quest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-568%20passed-brightgreen)](#6-测试)
+[![Tests](https://img.shields.io/badge/tests-635%20passed-brightgreen)](#6-测试)
+[![Coverage](https://img.shields.io/badge/coverage-89.7%25-brightgreen)](#6-测试)
+[![mypy](https://img.shields.io/badge/mypy-0%20error-brightgreen)](#6-测试)
+[![bandit](https://img.shields.io/badge/bandit-0%20finding-brightgreen)](#6-测试)
 
 > 输入预算、心情、口味和用餐偏好，RPG 游戏主持人替你从**麦当劳中国官方 MCP Server 的真实菜单**里，组出一份不超预算的点餐方案，并生成一张可以分享的任务成就卡。
 
@@ -58,11 +61,11 @@ pip install .
 ```bash
 burger-quest demo "我想吃辣，预算35，外送到南山科技园，一个人"   # 控制台入口
 python -m burger_quest demo "我想吃辣，预算35"                    # 模块入口
-python -m pytest tests/ -q                                       # 测试（568 个）
+python -m pytest tests/ -q                                       # 测试（635 个）
 ```
 
 依赖分层（单一事实来源 `pyproject.toml`）：运行时仅 `mcp>=1.2.0`（官方 SDK，**仅真实 MCP 模式需要**；
-引擎核心解析/规划/文案/卡片零第三方依赖）；测试依赖 `pytest>=8.0`（`dev` extra）。
+引擎核心解析/规划/文案/卡片零第三方依赖）；测试与质量工具在 `dev` extra（pytest / pytest-cov / mypy / bandit / pip-audit）。
 `requirements.txt` 不再重复罗列，避免两边漂移。
 
 ### 3.1 Windows 用户（PowerShell）
@@ -123,7 +126,7 @@ powershell -File scripts\check-mcp-windows.ps1
 | 真实 MCP 诊断 | `check-mcp-windows.ps1`（真实 Token） | ✅ 退出码 0（doctor L1–L4 全过） |
 | 中文+空格路径 | junction 到「D:\麦门 测试\burger-quest」后运行脚本 | ✅ 退出码 0（无需管理员权限） |
 | 非管理员 | 以上全部在当前用户权限下完成 | ✅ 无提权、无关闭安全软件 |
-| 全量测试 | `pytest tests/ -q` | ✅ 568 passed |
+| 全量测试 | `pytest tests/ -q` | ✅ 635 passed |
 
 **关于输出乱码的说明**：在 PowerShell 里把脚本输出**重定向到文件或管道**时，父进程会按系统代码页重新编码（中文 Windows 默认 GBK），这是 Windows 控制台机制、非脚本缺陷；交互式控制台窗口显示始终正常。需要 UTF-8 捕获时：`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)` 后再重定向，或用 `--json`/`--card-html` 让 Python 直接写 UTF-8 文件。
 
@@ -277,14 +280,15 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 | 防线 | 挡什么 | 实现 |
 | --- | --- | --- |
 | Host 白名单 | DNS rebinding（恶意域名解析到 127.0.0.1，浏览器以为在访问它，实际打到本地服务） | 只接受 `127.0.0.1` / `localhost` / `::1` |
-| Origin 校验 | 任意网页跨站 POST，借你的浏览器用你的 Token 发起真实 MCP 查询 | 写操作要求 Origin 与 Host 同源 |
+| Origin 校验 | 任意网页跨站 POST，借你的浏览器用你的 Token 发起真实 MCP 查询 | 写操作要求 Origin 与 Host 同源；**`Origin: null`（沙箱 iframe / data: / file: 等不透明来源）POST 一律拒绝**——Host 头只反映目标地址，攻击页面 fetch `http://127.0.0.1:<port>` 时 Host 必然合法，挡不住它 |
 
-实测（真实 HTTP 请求，非 mock）：
+实测（真实 HTTP 请求，非 mock；端到端用例见 tests/test_webui_e2e.py，共 24 例）：
 
 ```
 GET  /api/healthz  Host:127.0.0.1:PORT          → 200正常
 GET  /api/healthz  Host:evil.example.com:PORT   → 403 access-denied
 POST /api/quest    Origin:https://evil.example  → 403 access-denied（未触发任何 MCP 调用）
+POST /api/quest    Origin:null                  → 403 access-denied（沙箱 iframe 打不动）
 POST /api/quest    Origin:http://127.0.0.1:PORT  → 200 进入业务逻辑
 ```
 
@@ -331,7 +335,28 @@ POST /api/quest    Origin:http://127.0.0.1:PORT  → 200 进入业务逻辑
 python -m pytest tests/ -v
 ```
 
-568 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）、**券双字段协议契约**（couponId+couponCode 成对提交 / 600010 忠实还原 / 演示券均带码 / 三种券形态统一）、**10 类失败路径矩阵**（非法参数 / 缺字段 / 业务错误 / 协议级 isError / 部分工具失败 / 价格缺失 / 响应结构变化 / 超时 / 401 / 429，由元测试断言矩阵齐全且用例真实存在，防退化）、**MCP 全链路体检**（403 映射 / 连接超时与读取超时分离 / 无信封响应强制失败+白名单宽松 / 显式传输层超时 / doctor L1 探针分类且不携带 Token / 五层状态汇总 / 真实模式不回退 Demo）、**MCP 工具契约审计**（官方 list_tools Schema 快照 verbatim 落盘 tests/fixtures/；端到端传参对照官方 Schema：必填齐备/无官方外参数/枚举合法/类型正确；beCode 传递规则到店禁传/外送必传；优惠券 per-item 挂载与容量守卫；三态台账守卫防新工具绕过审计）。、**安全与隐私审计**（本地 Web 服务 Host 白名单挡 DNS rebinding + Origin 校验挡跨站代打真实查询/ 默认只监听 localhost；前端无内联脚本与 innerHTML、零 Token 引用；Token 不进审计/日志/卡片/进度存档；进度存档零个人信息且 opt-in；全仓无硬编码 Token 与手机号）。
+635 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）、**券双字段协议契约**（couponId+couponCode 成对提交 / 600010 忠实还原 / 演示券均带码 / 三种券形态统一）、**10 类失败路径矩阵**（非法参数 / 缺字段 / 业务错误 / 协议级 isError / 部分工具失败 / 价格缺失 / 响应结构变化 / 超时 / 401 / 429，由元测试断言矩阵齐全且用例真实存在，防退化）、**故障注入体系**（12 个注入点 I1-I12：网络分区 / 慢响应 / 半数工具失败 / 脏数据 / 结构漂移 / 限流风暴 / 断路器熔断 / 会话重试预算 / 部分成功混合失败 / 缓存污染 / 故障不污染后续状态 / 注入不污染全局——验证的是**降级行为合格**而非仅抛异常）、**安全与隐私审计**（本地 Web 服务 Host 白名单挡 DNS rebinding + Origin 校验挡跨站代打真实查询 / **`Origin: null`（沙箱 iframe 等不透明来源）POST 一律拒绝** / 默认只监听 localhost；前端无内联脚本与 innerHTML、零 Token 引用；Token 不进审计/日志/卡片/进度存档；进度存档零个人信息且 opt-in；全仓无硬编码 Token 与手机号）、**Web 服务端到端**（真实 ThreadingHTTPServer + 真实 HTTP 请求验证防线接线：恶意 Host/跨站 Origin/null Origin 在真实线路上 403 且业务代码零调用；同源请求走完业务与降级路径；每个响应带 CSP/nosniff/no-referrer/no-store；404/413/非法 JSON 行为）、**MCP 全链路体检**（403 映射 / 连接超时与读取超时分离 / 无信封响应强制失败+白名单宽松 / 显式传输层超时 / doctor L1 探针分类且不携带 Token / 五层状态汇总 / 真实模式不回退 Demo）、**MCP 工具契约审计**（官方 list_tools Schema 快照 verbatim 落盘 tests/fixtures/；端到端传参对照官方 Schema：必填齐备/无官方外参数/枚举合法/类型正确；beCode 传递规则到店禁传/外送必传；优惠券 per-item 挂载与容量守卫；三态台账守卫防新工具绕过审计）。
+
+### 质量门禁（CI 与本地同口径）
+
+| 门禁 | 命令 | 当前状态（2026-10-17） |
+| --- | --- | --- |
+| 全量测试 | `pytest -q` | 635 passed |
+| 覆盖率 | `pytest --cov=burger_quest --cov-fail-under=85` | 89.7%（基线 90%，阈值只升不降） |
+| 类型检查 | `mypy burger_quest`（SDK 缺桩按 pyproject 配置容忍） | 0 error（曾 45） |
+| 安全扫描 | `bandit -r burger_quest` | 0 finding（曾 12；两处 `nosec` 均带理由） |
+| 依赖漏洞 | `pip-audit` | 0 known vulnerability |
+| 空白检查 | `git diff --check HEAD~`（**上一个提交**口径） | 通过 |
+
+**推送前本地预检**（与 CI 逐字同口径，专治「本地全绿 CI 红」）：
+
+```bash
+python tools/prepush_check.py          # 快检：空白 + 语法 + 仓库状态
+python tools/prepush_check.py --full   # 追加全量 pytest
+```
+
+> 踩坑记录（2026-10-17）：CI 空白检查跑 `git diff --check HEAD~`（上一个提交），本地提交前习惯跑 `git diff --check`（未暂存改动）——范围不同，提交自带的 EOF 空行本地永远查不出（曾因此 CI 红、本地全绿）。`prepush_check.py` 就是为消除这个口径差而存在。
+
 
 ### MCP 调用效率（2026-10-14 实测，优化前后对比）
 
@@ -355,7 +380,7 @@ python -m pytest tests/ -v
 - 多候选门店列出暂停、外送无地址时的明确说明。
 
 **仍未验证（需要特定账户状态）**：
-- 优惠券字段与金额单位（联调账户当时无可用券；`items[].couponId` 挂载方式按官方 Schema 实现）；
+- 优惠券的**真实优惠实效**：提交契约已实测（`couponId`+`couponCode` 成对、只传 ID 报 600010，见 MCP_INTEGRATION.md §3.9），但联调账户无可用券，券的门槛/折扣字段单位与「有券时优惠是否真实生效」需有券账户才能结案；
 - 外送全链路（需要账户已保存配送地址）；
 - `query-meal-detail` 的特制选项（modification）与套餐换选项——MVP 不展示，接口已预留。
 
@@ -470,7 +495,7 @@ burger-quest/
 │   ├── smoke.py              只读 MCP 冒烟测试
 │   ├── cli.py                命令行入口
 │   └── data/demo_data.json   演示数据（随包分发，明确标注非实时）
-├── tests/                    568 个测试（含 official_tools_schema.json 官方 Schema 快照）
+├── tests/                    635 个测试（含 official_tools_schema.json 官方 Schema 快照）
 └── examples/                 可复现演示与示例卡片
 ```
 
@@ -479,8 +504,9 @@ burger-quest/
 ```bash
 git clone https://github.com/yaohanbo1-hue/burger-quest.git
 cd burger-quest
-pip install -e ".[dev]"        # 运行时 + 测试依赖
-python -m pytest tests/ -q     # 568 个测试
+pip install -e ".[dev]"        # 运行时 + 测试/质量工具（pytest/mypy/bandit/pip-audit）
+python -m pytest tests/ -q     # 635 个测试
+python tools/prepush_check.py  # 推送前预检（CI 同口径：空白/语法/仓库状态）
 python -m burger_quest smoke --demo   # 只读冒烟（离线）
 ```
 
@@ -490,7 +516,8 @@ python -m burger_quest smoke --demo   # 只读冒烟（离线）
 2. **文档与代码同步**：改了工具名/调用链/解析规则，`tests/test_skill_docs.py` 会校验 `skill.md` 与代码的一致性；
 3. **安全底线**：不提交任何真实 Token 或配置；HTML/Markdown 输出必须转义用户与 MCP 文本；CI 的 secret scan 会拦截；
 4. **演示数据**：`burger_quest/data/demo_data.json` 为演示数据，结构须与真实 MCP 返回保持兼容，不得冒充实时数据；
-5. 提交信息用中文描述「改了什么 + 为什么」，大改动附实测数据。
+5. **质量门禁**：覆盖率 ≥85%、mypy 零 error、bandit 零 finding、pip-audit 零漏洞——见 §6「质量门禁」；推送前跑 `tools/prepush_check.py`（CI 同口径，专治本地全绿 CI 红）；
+6. 提交信息用中文描述「改了什么 + 为什么」，大改动附实测数据。
 
 ## 12. 参赛信息
 

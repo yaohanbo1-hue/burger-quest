@@ -23,7 +23,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 from urllib.parse import parse_qs, urlparse
 
 from .mcp_base import MCPError
@@ -78,10 +78,21 @@ def _host_allowed(host_header: str, allow_lan: bool = False) -> bool:
     return False
 
 
-def _origin_allowed(origin: str, host_header: str) -> bool:
-    """Origin 校验：缺失（同源导航/fetch 省略）或与 Host 同源才放行。"""
-    if not origin or origin.lower() == "null":
-        return True  # 同源请求不带 Origin；opaque origin 交给 Host 防线
+def _origin_allowed(origin: str, host_header: str, reject_opaque: bool = False) -> bool:
+    """Origin 校验：缺失（同源导航/非浏览器客户端）或与 Host 同源才放行。
+
+    reject_opaque=True（POST 同源要求）时，`Origin: null` 一律拒绝：
+    null 是沙箱 iframe / data: / file: 等不透明来源的 Origin，恰是攻击者
+    可嵌入的浏览器表面—— Host 头反映的是**目标地址**而非页面来源，
+    攻击页面 fetch http://127.0.0.1:<port> 时 Host 必然合法，挡不住它
+    （响应无 CORS 头故读不回去，但请求已真实执行：消耗 Token 配额、
+    触发完整任务链路）。GET 保持容忍 null：跨站读不回去（无 ACAO），
+    且同源前端自身永远不发 null。
+    """
+    if not origin:
+        return True  # 同源导航/非浏览器客户端（curl 等）不带 Origin
+    if origin.lower() == "null":
+        return not reject_opaque
     try:
         parsed = urlparse(origin)
     except ValueError:
@@ -247,12 +258,21 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         if require_same_origin:
             origin = self.headers.get("Origin", "")
-            if not _origin_allowed(origin, host_header):
+            if not _origin_allowed(origin, host_header, reject_opaque=True):
                 self._access_denied(f"跨站请求被拒绝：Origin={origin or '(无)'}")
                 return True
         return False
 
     # -- 工具 -----------------------------------------------------------------
+    @property
+    def _app(self) -> "WebApp":
+        """self.server 的静态类型是 BaseServer（stdlib 注解），运行时必为 _Server。
+
+        serve() 是唯一构造入口（固定传 _Server），此处把类型收敛到 _Server，
+        避免满篇 getattr 绕过类型系统。
+        """
+        return cast("_Server", self.server).app
+
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -314,9 +334,9 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/app.js":
             self._send_asset("app.js", "text/javascript; charset=utf-8")
         elif path == "/api/status":
-            self._send_json(self.server.app.status())
+            self._send_json(self._app.status())
         elif path == "/api/progress":
-            self._send_json(self.server.app.progress_summary())
+            self._send_json(self._app.progress_summary())
         elif path == "/api/healthz":
             self._send_json({"ok": True})
         else:
@@ -350,12 +370,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"state": "no_result", "error": "需求文本过长（≤500 字）"}, status=400)
             return
         try:
-            result = self.server.app.run_quest(text, store_code)
+            result = self._app.run_quest(text, store_code)
         except MCPError as e:
             self._send_json({"state": error_state(e), "error": str(e), "state_meta": STATE_META[error_state(e)]})
             return
         payload = serialize_result(result)
-        payload["progress_lines"] = self.server.app.progress_lines(result)
+        payload["progress_lines"] = self._app.progress_lines(result)
         self._send_json(payload)
 
     def _handle_stores(self, body: dict):
@@ -377,7 +397,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            stores = self.server.app.nearby_stores(c.location)
+            stores = self._app.nearby_stores(c.location)
         except MCPError as e:
             self._send_json({"state": error_state(e), "stores": [], "error": str(e), "state_meta": STATE_META[error_state(e)]})
             return
@@ -397,7 +417,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "missing-text"}, status=400)
             return
         try:
-            result = self.server.app.run_quest(text, store_code)
+            result = self._app.run_quest(text, store_code)
         except MCPError as e:
             self._send_json({"state": error_state(e), "error": str(e)})
             return
@@ -418,9 +438,9 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, app, allow_lan: bool = False):
+    def __init__(self, address, app: "WebApp", allow_lan: bool = False):
         super().__init__(address, _Handler)
-        self.app = app
+        self.app: "WebApp" = app
         self.allow_lan = allow_lan
 
 
@@ -442,7 +462,7 @@ class WebApp:
         from .doctor import run_doctor
 
         report = run_doctor()
-        levels = []
+        levels: list[dict] = []
         for level, name in (("L1", "服务可访问"), ("L2", "认证成功"), ("L3", "工具发现"), ("L4", "单工具调用"), ("L5", "业务流程")):
             steps = [s for s in report.steps if s.get("level") == level]
             if level == "L5":

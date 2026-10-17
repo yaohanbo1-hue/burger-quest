@@ -112,7 +112,7 @@ CN_NUM_PAT = re.compile(
 ABOUT_TEN_PAT = re.compile(r"(?<![一二两三四五六七八九])十\s*来\s*(?:元|块|rmb|人民币)(?:钱)?")
 
 
-def parse_cn_number(m: re.Match) -> Optional[int]:
+def parse_cn_number(m: re.Match) -> int:
     """解析「十 / X十 / X十Y」为整数（0-99）；无法解析返回 None。"""
     tens_raw, ones_raw = m.group(1), m.group(2)
     tens = CN_DIGIT.get(tens_raw, 1) if tens_raw else 1
@@ -495,8 +495,9 @@ def parse(text: str) -> Constraints:
 
     # -- 营养偏好（明确区分「用户给的数」与「系统推断的阈值」） ---------------
     max_cal = None
-    if CAL_LIMIT_PAT.search(text):
-        max_cal = float(CAL_LIMIT_PAT.search(text).group(1))
+    m_cal = CAL_LIMIT_PAT.search(text)
+    if m_cal:
+        max_cal = float(m_cal.group(1))
         notes.append(f"按用户指定热量上限 {max_cal:.0f} 千卡筛选")
         sources["max_calories"] = "explicit"
     elif LOW_CAL_PAT.search(text):

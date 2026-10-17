@@ -74,7 +74,8 @@ EPITHET_FALLBACK = {
 
 
 def _seed(text: str) -> int:
-    return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
+    # usedforsecurity=False：仅把文本稳定映射为 RNG 种子（相同输入相同称号），非安全用途
+    return int(hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:8], 16)
 
 
 def quest_name(c: Constraints, option: Optional[PlanOption]) -> str:

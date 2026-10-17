@@ -102,12 +102,33 @@ def test_a4_post_handler_validates_origin():
         # 非法 scheme
         ("file://", "127.0.0.1:8787", False),
         ("javascript:alert(1)", "127.0.0.1:8787", False),
-        # 无 Host 无法比对
+        # 无 Origin 无法比对
         ("http://127.0.0.1:8787", "", False),
+        # 无 Origin 的 null（opaque origin）：GET 容忍（跨站读不回去，无 CORS 头）
+        ("null", "127.0.0.1:8787", True),
     ],
 )
 def test_a5_origin_allowlist(origin, host, ok):
     assert webui._origin_allowed(origin, host) is ok
+
+
+@pytest.mark.parametrize(
+    "origin,host,ok",
+    [
+        # POST 同源要求（reject_opaque=True）：null 一律拒绝——
+        # 沙箱 iframe/data:/file: 的不透明来源是攻击者可嵌入的浏览器表面，
+        # Host 头只反映目标地址、挡不住它们
+        ("null", "127.0.0.1:8787", False),
+        ("NULL", "127.0.0.1:8787", False),  # 大小写不敏感
+        # 无 Origin（非浏览器客户端/同源导航）POST 仍放行
+        ("", "127.0.0.1:8787", True),
+        # 同源 Origin 不受 reject_opaque 影响
+        ("http://127.0.0.1:8787", "127.0.0.1:8787", True),
+        ("https://evil.example.com", "127.0.0.1:8787", False),
+    ],
+)
+def test_a5b_opaque_origin_rejected_on_post(origin, host, ok):
+    assert webui._origin_allowed(origin, host, reject_opaque=True) is ok
 
 
 def test_a6_denial_is_explicit_not_silent():

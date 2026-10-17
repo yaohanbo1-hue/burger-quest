@@ -173,7 +173,9 @@ def run_smoke(client: MCPClient, location: str = DEFAULT_LOCATION, store_code: s
         report.add("query-meals", False, "上一步未确定门店场景，跳过（不编造菜单）")
 
     # 6. 餐品详情（拿第一个编码的名称）
-    if menu:
+    # scene 与 menu 同生共死（menu 非空即来自某次 attempt_scene 的成功查询），
+    # 显式双条件：既满足类型收敛，也在不变量被破坏时明确跳过而非崩溃
+    if menu and scene is not None:
         try:
             code = menu[0].code
             detail = client.meal_detail(scene, code)
@@ -188,7 +190,7 @@ def run_smoke(client: MCPClient, location: str = DEFAULT_LOCATION, store_code: s
         report.add("query-meal-detail", False, "无菜单编码，跳过")
 
     # 7. 算价（只读：价格计算，不产生订单）
-    if menu:
+    if menu and scene is not None:
         try:
             item = MenuItem(code=menu[0].code, name="冒烟测试", category=menu[0].category)
             quote = client.calculate_price(scene, [PlanItem(item, 1)], [])
@@ -239,7 +241,7 @@ def main(argv=None) -> int:
 
         mode = "demo（离线演示数据）"
         try:
-            client = MockMCPClient()
+            client: MCPClient = MockMCPClient()
         except MCPError as e:
             print(f"❌ {e}")
             return 2
@@ -261,8 +263,9 @@ def main(argv=None) -> int:
         client.close()
 
     # 安全自检：整个冒烟过程不允许出现写操作工具
+    # t is not None：审计记录缺 tool 字段时None 混入会让 sorted 直接 TypeError
     called = {c.get("tool") for c in getattr(client, "calls", []) if isinstance(c, dict)}
-    forbidden = sorted(t for t in called if t not in READONLY_TOOLS)
+    forbidden = sorted(t for t in called if t is not None and t not in READONLY_TOOLS)
     if forbidden:
         report.add("安全自检（仅只读工具）", False, f"出现非只读调用：{forbidden}")
     else:

@@ -33,8 +33,10 @@ jobs:
       - name: Syntax check (compileall)
         run: python -m compileall -q burger_quest tests tools
 
-      - name: Run tests
-        run: python -m pytest -q
+      # 覆盖率门禁 85%（pyproject [tool.coverage.report] fail_under 同值）：
+      # 2026-10-17 基线 90%；阈值只升不降，降覆盖需单独提交并说明理由
+      - name: Run tests (with coverage gate)
+        run: python -m pytest -q --cov=burger_quest --cov-report=term-missing --cov-fail-under=85
 
       - name: Packaging sanity (demo data ships with the wheel)
         run: |
@@ -48,6 +50,10 @@ jobs:
           print("wheel 包含演示数据 OK:", whl.split("/")[-1])
           PY
 
+      # 空白检查口径 = 上一个提交的 diff。本地同款命令：
+      #   git diff --check HEAD~（或直接跑 python tools/prepush_check.py）
+      # 注意：本地提交前跑 git diff --check（未暂存改动）查不出提交自带的
+      # 空白问题——2026-10-17 曾因此 CI 红而本地全绿（da31963）。
       - name: Whitespace check
         run: git diff --check HEAD~
 
@@ -94,6 +100,21 @@ jobs:
 
       - name: Skill docs consistency
         run: python -m pytest tests/test_skill_docs.py -q
+
+      # 类型检查（2026-10-17 从 45 error 清到 0；SDK 缺桩按 pyproject
+      # [tool.mypy] ignore_missing_imports 处理，burger_quest 自身零容忍）
+      - name: Type check (mypy, zero errors)
+        run: mypy burger_quest
+
+      # 安全静态扫描（2026-10-17 从 12 findings 清到 0；B324 哈希已加
+      # usedforsecurity=False，B110 改 contextlib.suppress，余下两处
+      # nosec 均带理由）。任何新 finding 直接红。
+      - name: Security scan (bandit, zero findings)
+        run: bandit -r burger_quest
+
+      # 依赖漏洞扫描（OSV 库；失败=存在已知漏洞的传递依赖）
+      - name: Dependency audit (pip-audit)
+        run: pip-audit --progress-spinner off
 
       - name: Offline demos still reproducible
         run: |

@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 from .mcp_base import MCPClient, MCPError, TOOLS_USED
@@ -155,6 +156,9 @@ def _probe_endpoint() -> tuple[bool, str, str]:
     import urllib.error
     import urllib.request
 
+    if not MCD_MCP_URL.lower().startswith("https://"):
+        # 端点探针只允许 https（MCD_MCP_URL 是模块常量，此处防御性校验 scheme）
+        return False, f"端点 URL 非 https（{MCD_MCP_URL}），已拒绝探测", "请检查 MCD_MCP_URL 配置"
     request = urllib.request.Request(
         MCD_MCP_URL,
         data=b"{}",
@@ -162,7 +166,8 @@ def _probe_endpoint() -> tuple[bool, str, str]:
         headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=ENDPOINT_PROBE_TIMEOUT) as response:
+        # URL 为硬编码 https 常量且上方已校验 scheme，不打开本地文件/自定义协议
+        with urllib.request.urlopen(request, timeout=ENDPOINT_PROBE_TIMEOUT) as response:  # nosec B310
             return True, f"HTTP {response.status}（未认证请求即被放行，服务正常）", ""
     except urllib.error.HTTPError as e:
         code = e.code
@@ -259,7 +264,7 @@ def _hint_for(category: str) -> str:
         "TIMEOUT_READ": "读取超时（已连接但服务端迟迟不返回）：稍后重试；持续出现可能是服务端过载或被限速，请反馈官方渠道",
         "RESPONSE": "服务端返回了非预期格式（网关错误页/服务异常）：可先用 curl 直接 POST https://mcp.mcd.cn 对比 HTTP 状态码；持续出现请反馈",
         "SDK": "SDK/协议层错误：执行 pip install -U mcp 升级官方 SDK 后重试；仍失败请附诊断输出反馈",
-        "TOKEN_MISSING": "配置 MCD_MCP_TOKEN（环境变量或 .env），详见上方 Token 步骤建议",
+        "TOKEN_MISSING": "配置 MCD_MCP_TOKEN（环境变量或 .env），详见上方 Token 步骤建议",  # nosec B105：操作提示文案，非凭证
         "TOOL_MISSING": "官方工具清单缺少项目依赖的工具：可能是服务端变更，请到仓库 Issue 反馈",
         "BUSINESS": "官方返回业务错误：按消息提示调整（如更换门店/位置），或稍后重试",
     }.get(category, "查看上方原因，修复后重试；仍失败请带诊断输出到仓库 Issue 反馈")
@@ -305,10 +310,9 @@ def _check_mcp_live(report: DoctorReport) -> None:
         return
     finally:
         if client is not None:
-            try:
+            # 尽力而为：close 失败不影响已产出的诊断结论
+            with suppress(Exception):
                 client.close()
-            except Exception:
-                pass
 
     # 只读调用（用独立会话，避免上面的 finally 已关闭）
     try:

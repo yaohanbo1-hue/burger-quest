@@ -415,7 +415,10 @@ def coupon_expected_discount(coupon: Coupon, combo: list[PlanItem], estimated_or
         base = estimated_original
         if coupon.applicable_codes:
             applicable = {pi.item.code for pi in combo} & set(coupon.applicable_codes)
-            base = sum(pi.item.price_cents * pi.qty for pi in combo if pi.item.code in applicable)
+            # price_cents 可能为 None（MCP 未返回真实价格）：估算时按 0 计——
+            # 只可能低估、不会高估，避免把本该尝试的组合提前排除；真实价格仍由
+            # calculate-price 权威核验，绝不用估算值展示或入账
+            base = sum((pi.item.price_cents or 0) * pi.qty for pi in combo if pi.item.code in applicable)
         return int(round(base * (1.0 - coupon.percent)))
     return int(coupon.value_cents or 0)
 
@@ -437,11 +440,16 @@ def _make_option(
     missing: list,
 ) -> PlanOption:
     """把一次权威核验结果组装成方案（总价只认 quote；优惠效力如实核验）。"""
+    total_cents = quote.total_cents
+    if total_cents is None:
+        # 调用方在调用前已过滤 total_cents=None 的核验结果；此处防御性明确失败，
+        # 绝不拿 0 或估算值充当权威总价
+        raise ValueError("权威算价未返回总价，无法组装方案")
     opt = PlanOption(
         title="",
         items=list(combo),
         coupons=list(cset),
-        total_cents=quote.total_cents,
+        total_cents=total_cents,
         original_cents=quote.original_cents,
         discount_cents=quote.discount_cents,
         delivery_fee_cents=quote.delivery_fee_cents,
@@ -451,8 +459,8 @@ def _make_option(
         nutrition_missing=list(missing),
     )
     if c.budget_cents is not None:
-        opt.within_budget = opt.total_cents <= c.budget_cents
-        opt.remaining_cents = c.budget_cents - opt.total_cents
+        opt.within_budget = total_cents <= c.budget_cents
+        opt.remaining_cents = c.budget_cents - total_cents
     # 优惠核验：预期折扣 vs 权威折扣，不默认可叠加
     expected = sum(coupon_expected_discount(c2, combo, estimated) for c2 in cset)
     actual = opt.discount_cents or 0
@@ -479,7 +487,7 @@ def build_plan(
     menu: list[MenuItem],
     coupons: list[Coupon],
     nutrition: list[NutritionItem],
-    price_fn: Callable[[list[PlanItem], list[str]], PriceQuote],
+    price_fn: Callable[[list[PlanItem], list[Coupon]], PriceQuote],
 ) -> tuple[list[PlanOption], list[str]]:
     """返回 (方案列表, 警告列表)。price_fn 是权威价格计算（MCP calculate-price）。"""
     warnings: list[str] = []
@@ -520,7 +528,10 @@ def build_plan(
     nutrition_excluded = 0
     fee_est = 900 if c.dining_mode == "delivery" else 0
     for combo in candidates:
-        estimated = sum(pi.item.price_cents * pi.qty for pi in combo)
+        # price_cents 可能为 None（MCP 未返回真实价格）：估算按 0 计（只低估不高估，
+        # 不会把本该尝试的组合提前排除）；预筛只决定是否发起权威核验，最终价格
+        # 仍由 calculate-price 说了算
+        estimated = sum((pi.item.price_cents or 0) * pi.qty for pi in combo)
         # 预算预筛：估算价 + 配送费估算，留 25% 余量（优惠券可能拉低最终价），
         # 最终是否超预算以 calculate-price 权威结果为准
         if c.budget_cents is not None:

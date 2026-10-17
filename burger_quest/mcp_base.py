@@ -395,7 +395,7 @@ def adapt_meals(raw: Any) -> list[MenuItem]:
     注意：官方菜单**不含名称与价格**——名称由 query-meal-detail 补充，
     价格由 calculate-price 补充。这里只带回编码/分类/标签。
     """
-    cats = []
+    cats: list = []
     if isinstance(raw, dict):
         cats = raw.get("categories") or raw.get("list") or []
     elif isinstance(raw, list):
@@ -432,7 +432,9 @@ def adapt_meals(raw: Any) -> list[MenuItem]:
 def adapt_meal_detail(raw: Any) -> dict:
     """query-meal-detail -> {code, name, rounds, is_combo}。"""
     d = raw if isinstance(raw, dict) else {}
-    data = d.get("data") if isinstance(d.get("data"), dict) else d
+    data = d.get("data")
+    if not isinstance(data, dict):
+        data = d  # 无 data 包裹时信封即数据本体
     code = str(_first(data, "code", "mealCode", default="") or "")
     name = str(_first(data, "name", "mealName", default="") or "")
     rounds = data.get("rounds") or []
@@ -726,9 +728,10 @@ def parse_tool_text(result: Any) -> Any:
                 block_text = block.get("text")
             if isinstance(block_text, str):
                 texts.append(block_text)
-        text = "\n".join(texts) if texts else None
-        if text is None:
+        joined = "\n".join(texts) if texts else None
+        if joined is None:
             return content
+        text = joined
     else:
         return content
     envelope = extract_api_json(text)
