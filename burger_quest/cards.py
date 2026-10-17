@@ -8,6 +8,15 @@
 - 营养信息只在真实数据存在时展示，缺失明确显示「未知」，不用装饰性数字填空；
 - 总价只认 calculate-price 权威结果；未核验显示「未知」；
 - 纯本地 HTML/CSS，无外部 CDN / 字体 / 图片依赖；适配手机与打印。
+
+价格展示契约（2026-10-17 价格专项审计新增）：
+- 价格四段：原价合计（官方 originalPrice）/ 已核实优惠（discount）/
+  配送费 / 应付总价（price，即用户最终支付金额）——均来自 calculate-price 权威返回；
+- 「单价」语义注明：官方按商品行返回行小计，数量 >1 时 ÷ 数量归一；
+  套餐类餐品（三件套/双全盒/单人餐等）该单价即套餐组合价——按餐品名
+  自带信息呈现，**不按名称推断价格类型**；
+- **价格适用范围**：门店编码 + 用餐渠道 + 生成时间；官方价格随门店/时间/
+  渠道/规格变化，卡片只代表该门店该次查询的返回。
 """
 from __future__ import annotations
 
@@ -155,6 +164,39 @@ def _budget_bar(option: PlanOption, c: Constraints) -> str:
     )
 
 
+# 用餐渠道 -> 中文（价格适用范围标注用）
+_CHANNEL_CN = {"delivery": "外送（麦乐送）", "takeaway": "到店自取", "dine_in": "堂食"}
+
+
+def _price_notes(store: Optional[Store], c: Constraints, generated_at: str, demo: bool) -> str:
+    """价格适用范围 + 单价语义说明（2026-10-17 价格专项审计新增）。
+
+    诚实边界：价格只代表「该门店 + 该渠道 + 该次查询」的官方返回；
+    官方价格随门店/时间/渠道/规格变化。演示数据明确标注非实时。
+    """
+    e = html.escape
+    if demo:
+        scope = "演示数据（MockMCPClient，非实时菜单）——不构成任何真实价格"
+    else:
+        channel = _CHANNEL_CN.get(c.dining_mode, c.dining_mode)
+        code = e(store.code) if store else "未知"
+        when = e(generated_at) if generated_at else "（未提供）"
+        scope = (
+            f"适用范围：门店编码 {code} · {e(channel)} · 生成时间 {when}；"
+            "价格为该门店该次查询的官方返回，随门店/时间/渠道/规格变化"
+        )
+    unit_note = (
+        "「单价」为官方按商品行返回的行小计归一（数量>1 时 ÷数量）；"
+        "套餐类餐品（三件套/双全盒/单人餐等）该单价即套餐组合价"
+    )
+    return (
+        '<div class="price-notes">'
+        f'<div class="p-note scope">📍 {scope}</div>'
+        f'<div class="p-note unit">💱 {unit_note}</div>'
+        "</div>"
+    )
+
+
 def _nutrition_block(option: PlanOption) -> str:
     """属性面板：只展示 option.nutrition 里已汇总的真实数据；缺失明确显示未知。
 
@@ -265,6 +307,11 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .bar {{ height:12px; background:#f3e7c8; border:2px solid var(--ink); }}
   .bar-fill {{ height:100%; background:repeating-linear-gradient(45deg,var(--mc-yellow) 0 8px,#e6a700 8px 16px); }}
   .bar-wrap.over .bar-fill {{ background:repeating-linear-gradient(45deg,#c00 0 8px,#800 8px 16px); }}
+  /* ---------- 价格说明（适用范围/单价语义，2026-10-17 新增） ---------- */
+  .price-notes {{ margin-top:8px; }}
+  .p-note {{ font-size:11px; color:#8a6b3a; background:#fff8e6; border:1px dashed var(--line);
+    padding:5px 8px; margin-top:4px; line-height:1.6; }}
+  .p-note.scope {{ color:#4a3b8c; background:#f0edfb; border-color:#cfc4f0; }}
   /* ---------- 属性面板 ---------- */
   .stats {{ display:flex; gap:8px; flex-wrap:wrap; }}
   .stat {{ flex:1; min-width:88px; background:#fff; border:2px solid var(--line); padding:8px;
@@ -326,6 +373,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <h3>价 格 结 算</h3>
     <div class="price">{price_rows}</div>
     {budget_bar}
+    {price_notes}
     <h3>属 性 面 板</h3>
     {nutrition_block}
     <h3>智 囊 团 备 注</h3>
@@ -378,6 +426,7 @@ def render_html(
         gear=_gear_rows(option, demo),
         price_rows=_price_rows(option, constraints),
         budget_bar=_budget_bar(option, constraints),
+        price_notes=_price_notes(store, constraints, generated_at, demo),
         nutrition_block=_nutrition_block(option),
         reasons="".join(f"<li>{e(r)}</li>" for r in option.reasons) or "<li>（无）</li>",
         unmet_block=unmet_block,
@@ -468,6 +517,19 @@ def render_markdown(
         used = option.total_cents / constraints.budget_cents * 100
         lines.append("")
         lines.append(f"⚡ 预算使用率：`{'█' * max(1, min(20, int(used / 5)))}{'░' * max(0, 20 - int(used / 5))}` {used:.0f}%")
+    # 价格适用范围 + 单价语义（2026-10-17 价格专项审计新增）
+    if demo:
+        lines.append("")
+        lines.append("> 📍 **适用范围**：演示数据（MockMCPClient，非实时菜单）——不构成任何真实价格")
+    else:
+        channel = _CHANNEL_CN.get(constraints.dining_mode, constraints.dining_mode)
+        code = store.code if store else "未知"
+        lines.append("")
+        lines.append(
+            f"> 📍 **适用范围**：门店编码 `{code}` · {channel} · 生成时间 {generated_at}；"
+            "价格为该门店该次查询的官方返回，随门店/时间/渠道/规格变化"
+        )
+    lines.append("> 💱 「单价」为官方按商品行返回的行小计归一（数量>1 时 ÷数量）；套餐类餐品（三件套/双全盒/单人餐等）该单价即套餐组合价")
     lines.append("")
     lines.append("## 🧪 属性面板")
     lines.append("")

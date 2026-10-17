@@ -215,7 +215,9 @@ def _as_list(v) -> list:
     if isinstance(v, list):
         return v
     if isinstance(v, dict):
-        for k in ("list", "items", "data", "records", "result"):
+        # 官方未定义容器键名的工具（如 delivery-query-addresses）按常见容器键兼容；
+        # 含 "addresses"（配送地址推测容器名，2026-10-17 契约审计补充）。
+        for k in ("list", "items", "data", "records", "result", "addresses"):
             if isinstance(v.get(k), list):
                 return v[k]
         return [v]
@@ -662,23 +664,31 @@ def resolve_coupon_pair(coupon) -> tuple[str, str]:
 def build_calc_payload(scene: OrderScene, items: list, coupons: list) -> dict:
     """构造 calculate-price 入参（联调实测 Schema，2026-10-16 补 couponCode）。
 
-    items: list[PlanItem]；coupons 挂在第一件商品上。
-    官方 Schema：items[].couponId **与** items[].couponCode 必须同时提交
-    （真实联调实测：只传 couponId → 业务错误 600010「使用优惠券需要couponId和couponCode」）。
+    items: list[PlanItem]；coupons 与商品**一一配对**挂载。
+    官方 Schema（list_tools 实测，2026-10-17 契约审计快照）：
+    items[] 的每项都是独立对象，`couponId` 与 `couponCode` 定义在**商品级**
+    （items.items.properties），即每件商品可各带一张券——不是「整单一张券」。
+
+    因此：
+    - 第 i 张券挂到第 i 件商品（i < len(items)；coupons 按调用方给定的优先级排序）；
+    - 券数 > 商品数时，超出部分**不静默丢弃**——由调用方（planner.coupon_sets）
+      保证试探规模不超过商品数；本函数只挂得下的部分，避免伪造提交。
 
     coupons 兼容三种形态（按优先级）：
     - Coupon 对象：取 .id 与 .code（code 为空则只传 couponId）；
     - (id, code) 元组；
     - 纯字符串（仅 id，旧调用路径/mock）。
     """
-    coupon_id, coupon_code = resolve_coupon_pair(coupons[0] if coupons else None)
+    pairs = [resolve_coupon_pair(c) for c in (coupons or [])]
     payload_items = []
     for i, pi in enumerate(items):
         entry = {"productCode": pi.item.code, "quantity": pi.qty}
-        if coupon_id and i == 0:
-            entry["couponId"] = coupon_id
-            if coupon_code:
-                entry["couponCode"] = coupon_code
+        if i < len(pairs):
+            coupon_id, coupon_code = pairs[i]
+            if coupon_id:
+                entry["couponId"] = coupon_id
+                if coupon_code:
+                    entry["couponCode"] = coupon_code
         payload_items.append(entry)
     payload = {
         "storeCode": scene.store_code,
@@ -696,6 +706,12 @@ def parse_tool_text(result: Any) -> Any:
 
     联调实测：content 文本 = 字段说明 + JSON 信封 + 传参规则说明。
     优先提取信封 JSON；提取不到则原样返回文本（由适配器/调用方处理）。
+
+    协议合规说明（2026-10-17 稳定性增强）：Streamable HTTP 的 SSE 流由官方
+    SDK 在传输层完成聚合，到这里 content 只是 ContentBlock 列表——本函数只做
+    「把所有文本块按序拼接 → 从文本里找信封」，绝不把 SSE 事件、普通 JSON、
+    JSON-RPC 帧混为一谈（不自研协议解析）。多个文本块按序拼接是防御性的：
+    个别服务端/代理形态可能把说明与信封拆成两个块。
     """
     content = getattr(result, "content", None)
     if content is None and isinstance(result, dict):
@@ -703,11 +719,15 @@ def parse_tool_text(result: Any) -> Any:
     if isinstance(content, str):
         text = content
     elif isinstance(content, list) and content:
-        first = content[0]
-        text = getattr(first, "text", None)
-        if text is None and isinstance(first, dict):
-            text = first.get("text")
-        if not isinstance(text, str):
+        texts = []
+        for block in content:
+            block_text = getattr(block, "text", None)
+            if block_text is None and isinstance(block, dict):
+                block_text = block.get("text")
+            if isinstance(block_text, str):
+                texts.append(block_text)
+        text = "\n".join(texts) if texts else None
+        if text is None:
             return content
     else:
         return content

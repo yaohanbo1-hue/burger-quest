@@ -336,6 +336,27 @@ def parse_tastes(text: str) -> tuple[tuple, tuple]:
     return tuple(likes), tuple(avoids)
 
 
+# ---------------------------------------------------------------------------
+# 辣度分级（2026-10-17 推荐算法完善新增）
+# 官方菜单标签只有「辣/不辣」粒度（联调实测 tags），因此辣度分级**只记录用户
+# 表述、不据此声称匹配精度**——推荐仍按「含辣」匹配，解析时明示这一边界。
+# ---------------------------------------------------------------------------
+SPICY_LEVEL_PATTERNS = [
+    ("extra", re.compile(r"(变态辣|特辣|重辣|超辣|猛辣)")),
+    ("medium", re.compile(r"(中辣|香辣|麻辣|小辣)")),
+    ("mild", re.compile(r"(微辣|少辣|一点点辣|稍微.{0,4}辣|不太辣|清淡.{0,4}辣)")),
+]
+SPICY_LEVEL_CN = {"mild": "微辣", "medium": "中辣/香辣", "extra": "特辣/变态辣"}
+
+
+def parse_spicy_level(text: str) -> Optional[str]:
+    """用户明确表达的辣度分级（extra > medium > mild）；无则 None。"""
+    for level, pat in SPICY_LEVEL_PATTERNS:
+        if pat.search(text):
+            return level
+    return None
+
+
 def parse_mood(text: str) -> Optional[str]:
     # night 优先于 tired（深夜加班）
     if _match_any(text, MOOD_KEYWORDS["night"]):
@@ -454,6 +475,16 @@ def parse(text: str) -> Constraints:
             + "/".join(_taste_cn(t) for t in avoid_tastes)
             + "（候选组合将不含这些口味，不会被其他偏好覆盖）"
         )
+    # 辣度分级：仅当用户「想要辣」时记录；避免口味/冲突时不记录
+    spicy_level = None
+    if "spicy" in tastes and "spicy" not in avoid_tastes:
+        spicy_level = parse_spicy_level(text)
+        if spicy_level:
+            sources["spicy_level"] = "explicit"
+            notes.append(
+                f"已记录辣度偏好（{SPICY_LEVEL_CN[spicy_level]}）；官方菜单标签为「辣/不辣」粒度，"
+                "推荐按「含辣」匹配，无法验证具体辣度等级（不声称分级匹配）"
+            )
     if "清淡" in text and "veggie" in tastes and not any("清淡" in n for n in notes):
         notes.append("「清淡」按清爽/素食类餐品筛选（启发式映射，非官方分类）")
 
@@ -533,6 +564,7 @@ def parse(text: str) -> Constraints:
         store_code=store_code,
         tastes=tastes,
         avoid_tastes=avoid_tastes,
+        spicy_level=spicy_level,
         mood=mood,
         max_calories=max_cal,
         min_protein_g=min_protein,

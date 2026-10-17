@@ -46,6 +46,7 @@ def _ensure_utf8_output() -> None:
 import argparse
 import datetime
 import json
+import os
 from pathlib import Path
 
 from . import __version__
@@ -70,6 +71,8 @@ def _print_result(result, card_html: Path = None, card_md: Path = None, json_out
 
         print("\n【价格结算】")
         for line in rpg.price_lines(result.chosen, c):
+            print("  " + line)
+        for line in rpg.price_scope_lines(result.store, c):
             print("  " + line)
     if len(result.options) > 1:
         print("\n【方案对比】按推荐顺序排列（最多 3 个可比较方案；总价均为 calculate-price 权威结果）：")
@@ -215,6 +218,93 @@ def _cmd_stores(args) -> int:
     return 0
 
 
+def _resolve_progress_path(args) -> str:
+    """解析 --progress：裸旗标读环境变量；返回空 = 不启用（默认不写文件）。"""
+    value = getattr(args, "progress", None)
+    if not value:
+        return ""
+    if value == "__ENV__":
+        return os.environ.get("BURGER_QUEST_PROGRESS", "")
+    return str(value)
+
+
+def _print_progress_section(args, result, demo: bool) -> None:
+    """【冒险者档案】：本地虚拟进度结算（成就/经验/剧情解锁）。
+
+    安全边界：仅在显式提供进度路径时写文件；文件只含经验、成就 id、
+    签名哈希与门店编码（无个人信息、无 Token）。进度为应用内虚拟进度，
+    与麦当劳官方无关。
+    """
+    from . import lore
+    from . import progress as progress_mod
+
+    path = _resolve_progress_path(args)
+    print("\n【冒险者档案】（本地虚拟进度 · 与麦当劳官方无关）")
+    if not path:
+        print("  " + lore.state_copy("progress_off"))
+        return
+    prog, notes = progress_mod.load_progress(path)
+    for note in notes:
+        print(f"  ⚠️ {note}")
+    prog, run, events = progress_mod.apply_progress(
+        prog,
+        result,
+        demo=demo,
+        used_json=bool(getattr(args, "json", None)),
+        card_generated=bool(result.card_html and (getattr(args, "card_html", None) or getattr(args, "card_md", None))),
+    )
+    progress_mod.save_progress(path, prog)
+    level, title = prog.level()
+    for line in events:
+        print("  " + line)
+    from .achievements import ACHIEVEMENTS
+    from . import lore as _lore
+
+    unlocked = prog.unlocked_ids()
+    print(f"  📊 等级 LV.{level} {title} · 累计经验 {prog.xp} · 成就 {len(unlocked)}/{len(ACHIEVEMENTS)} · 据点 {len(prog.stores)} 个")
+    chapters = _lore.unlocked_chapters(unlocked)
+    if chapters:
+        print("  📚 剧情进度：" + "、".join(c.name for c in chapters))
+    else:
+        print("  📚 剧情进度：尚未开启（完成探索任务以解锁章节）")
+    print(f"  {lore.state_copy('progress_hint')}（存档：{path}；仅含虚拟进度，无个人信息）")
+
+
+def _print_achievement_gallery(args) -> int:
+    """progress 子命令：进度查看 + 成就图鉴 + 剧情章节一览。"""
+    from . import lore
+    from . import progress as progress_mod
+    from .achievements import ACHIEVEMENTS
+
+    path = _resolve_progress_path(args) or getattr(args, "progress", None) or ""
+    print("🏆 Burger Quest 冒险者档案（本地虚拟进度 · 与麦当劳官方无关）")
+    if not path:
+        print(lore.state_copy("progress_off"))
+        for line in lore_format_gallery(set()):
+            print(line)
+        return 0
+    prog, notes = progress_mod.load_progress(path)
+    for note in notes:
+        print(f"⚠️ {note}")
+    level, title = prog.level()
+    unlocked = prog.unlocked_ids()
+    print(f"📊 LV.{level} {title} · 累计经验 {prog.xp} · 成就 {len(unlocked)}/{len(ACHIEVEMENTS)} · 据点 {len(prog.stores)} 个")
+    for line in lore_format_gallery(unlocked):
+        print(line)
+    print("\n📚 剧情章节（随真实探索逐步解锁）：")
+    for chapter in lore.CHAPTERS:
+        mark = "✅" if chapter.is_unlocked(unlocked) else "🔒"
+        print(f"  {mark} {chapter.name}——{chapter.summary}")
+    print(f"\n存档：{path}（仅含虚拟进度：经验、成就 id、签名哈希、门店编码；无个人信息）")
+    return 0
+
+
+def lore_format_gallery(unlocked: set) -> list:
+    from .achievements import format_achievement_list
+
+    return format_achievement_list(unlocked)
+
+
 def main(argv=None) -> int:
     _ensure_utf8_output()
     parser = argparse.ArgumentParser(
@@ -225,6 +315,7 @@ def main(argv=None) -> int:
             '  python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest quest "我想吃辣，预算35，外送到南山科技园"\n'
             '  python -m burger_quest stores "南山科技园"\n'
+            "  python -m burger_quest web              # 本地 Web 界面（默认仅本机 127.0.0.1:8787）\n"
             "  python -m burger_quest doctor              # 真实连接诊断（需 Token）\n"
             "  python -m burger_quest smoke --demo\n"
         ),
@@ -243,6 +334,16 @@ def main(argv=None) -> int:
         p.add_argument("--card-html", type=Path, default=None, help="分享卡 HTML 输出路径")
         p.add_argument("--card-md", type=Path, default=None, help="分享卡 Markdown 输出路径")
         p.add_argument("--json", type=Path, default=None, help="结构化结果 JSON 输出路径")
+        p.add_argument(
+            "--progress",
+            nargs="?",
+            const="__ENV__",
+            default=None,
+            help=(
+                "启用本地虚拟进度（成就/经验/剧情）：--progress <文件路径>；"
+                "裸 --progress 则读环境变量 BURGER_QUEST_PROGRESS。默认不写任何文件。"
+            ),
+        )
         p.add_argument(
             "--card-snapshot",
             action="store_true",
@@ -308,14 +409,45 @@ def main(argv=None) -> int:
     p_smoke.add_argument("--demo", action="store_true", help="离线演示模式：使用内置演示数据（无需 Token，可重复执行）")
     p_smoke.add_argument("--json", default=None, help="冒烟结果 JSON 输出路径")
 
+    p_prog = sub.add_parser(
+        "progress",
+        help="查看本地虚拟进度与成就图鉴（--progress 指定存档；未指定只显示图鉴）",
+        description=(
+            "查看本地虚拟进度（经验/等级/成就/剧情章节）。\n"
+            "进度只在显式提供 --progress <路径>（或环境变量 BURGER_QUEST_PROGRESS）时读写；\n"
+            "存档仅含虚拟进度数据（经验、成就 id、签名哈希、门店编码），无个人信息。\n"
+            "本地进度与麦当劳官方账户无关，不做任何同步。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_prog.add_argument("--progress", default=None, help="进度文件路径（也可用环境变量 BURGER_QUEST_PROGRESS）")
+
+    p_web = sub.add_parser(
+        "web",
+        help="本地 Web 界面（默认仅监听 127.0.0.1；Token 只在服务端，不下发浏览器）",
+        description=(
+            "启动本地 Web 界面（不熟悉命令行的用户首选）。\n"
+            "- 默认只监听 http://127.0.0.1:8787 ——仅本机可访问；\n"
+            "- Token 只从环境变量 MCD_MCP_TOKEN 或 .env 读取（服务端），绝不下发浏览器；\n"
+            "- 真实查询失败会明确报错，不会自动切换演示数据；\n"
+            "- --allow-lan 才监听其它网卡（局域网设备可访问，请评估风险）；\n"
+            "- 停止：Ctrl+C。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_web.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1，仅本机）")
+    p_web.add_argument("--port", type=int, default=8787, help="监听端口（默认 8787）")
+    p_web.add_argument("--progress", default=None, help="本地虚拟进度存档路径（可选；不传则不记录）")
+    p_web.add_argument("--allow-lan", action="store_true", help="允许监听非 localhost 地址（局域网暴露风险自担）")
+
     p_doctor = sub.add_parser(
         "doctor",
-        help="真实 MCP 连接诊断：Python/依赖/Token/网络/初始化/工具发现/只读调用（缺 Token 直接失败，不回退 Demo）",
-        description=(
-            "真实 MCP 连接诊断（只读）：依次检查 Python 版本 -> 官方 mcp SDK -> MCD_MCP_TOKEN 存在性\n"
-            "-> 网络可达 -> MCP 初始化 -> 工具发现 -> 一次只读工具调用。每步 PASS/FAIL +\n"
-            "原因 + 下一步建议；失败分类：TOKEN_MISSING / 401 / 403 / 429 / NETWORK / SDK /\n"
-            "TOOL_MISSING / BUSINESS。Token 只查存在性，绝不打印值。\n"
+        help="真实 MCP 连接诊断：L1 服务可访问（无需 Token）/认证/工具发现/只读调用（缺 Token 直接失败，不回退 Demo）",        description=(
+            "真实 MCP 连接诊断（只读）：Python 版本 -> 官方 mcp SDK -> L1 服务可访问（HTTP 探测，无需 Token）\n"
+            "-> MCD_MCP_TOKEN 存在性 -> L2 认证（MCP 初始化）-> L3 工具发现 -> L4 一次只读工具调用。\n"
+            "每步 PASS/FAIL + 原因 + 下一步建议；末尾输出五层验证状态汇总（L5 由 smoke/quest 覆盖）。\n"
+            "失败分类：TOKEN_MISSING / 401 / 403 / 429 / NETWORK / TIMEOUT_CONNECT / TIMEOUT_READ / "
+            "RESPONSE / SDK / TOOL_MISSING / BUSINESS。Token 只查存在性，绝不打印值。\n"
             "退出码：0=全部通过；1=有失败；2=配置错误（缺 Token/缺 SDK/Python 版本不符）。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -334,6 +466,16 @@ def main(argv=None) -> int:
         for t in TOOLS_RESERVED:
             print(f"  - {t}")
         return 0
+
+    if args.cmd == "progress":
+        return _print_achievement_gallery(args)
+
+    if args.cmd == "web":
+        from . import webui
+
+        return webui.serve(
+            host=args.host, port=args.port, progress_path=args.progress, allow_lan=args.allow_lan
+        )
 
     if args.cmd == "stores":
         return _cmd_stores(args)
@@ -375,7 +517,9 @@ def main(argv=None) -> int:
             args.text, client, store_code=args.store_code, generated_at=now,
             card_snapshot=args.card_snapshot,
         )
-        return _print_result(result, args.card_html, args.card_md, args.json, mode="demo")
+        rc = _print_result(result, args.card_html, args.card_md, args.json, mode="demo")
+        _print_progress_section(args, result, demo=True)
+        return rc
 
     if args.cmd == "quest":
         from .mcp_http import HttpMCPClient
@@ -389,7 +533,9 @@ def main(argv=None) -> int:
         except MCPError as e:
             print(f"❌ {e}")
             return 2
-        return _print_result(result, args.card_html, args.card_md, args.json, mode="quest")
+        rc = _print_result(result, args.card_html, args.card_md, args.json, mode="quest")
+        _print_progress_section(args, result, demo=False)
+        return rc
 
     return 1
 

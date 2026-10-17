@@ -71,3 +71,38 @@ def test_scripts_exist_for_documented_commands():
     """README 引用的三个脚本必须存在。"""
     for name in ("setup-windows.ps1", "run-windows.ps1", "check-mcp-windows.ps1"):
         assert (SCRIPTS_DIR / name).is_file(), f"缺少 scripts/{name}"
+
+
+# ---------------------------------------------------------------- 2026-10-17 Windows 启动体验增强
+def test_run_help_and_exit_code_legend():
+    """run-windows.ps1：帮助命令、退出码图例、安全退出指引（要求 8）。"""
+    text = RUN.read_bytes().decode("utf-8-sig")
+    assert "$Command = 'help'" in text  # 命令可选，缺省显示帮助（要求 8：查看帮助）
+    assert "-eq 'help'" in text
+    assert "0=成功" in text and "2=配置或连接错误" in text  # 退出码图例
+    assert "Ctrl+C" in text  # 安全退出指引
+
+
+def test_run_never_requires_admin_or_security_software():
+    """不得要求管理员权限或关闭安全软件（要求 7）。"""
+    for script in ALL_SCRIPTS:
+        text = script.read_bytes().decode("utf-8-sig")
+        for forbidden in ("Start-Process -Verb RunAs", "-Verb RunAs", "Set-MpPreference", "关闭 360", "关闭360", "禁用 Windows Defender"):
+            assert forbidden not in text, f"{script.name} 出现提权/安全软件操作：{forbidden}"
+
+
+def test_run_token_missing_message_is_actionable():
+    """缺 Token 提示必须可操作（给申请地址与替代路径），且不回退 Demo（要求 3/5）。"""
+    text = RUN.read_bytes().decode("utf-8-sig")
+    assert "open.mcd.cn/mcp" in text  # 申请地址
+    assert "不会自动切换到演示数据" in text  # 不回退 Demo
+
+
+def test_setup_reads_token_only_from_user_input_or_env():
+    """Token 只能来自进程环境变量、用户输入或 .env；不得有脚本默认值（要求 4）。"""
+    text = SETUP.read_bytes().decode("utf-8-sig")
+    assert "AsSecureString" in text  # 不回显输入
+    assert "Read-Host" in text
+    # 不允许出现赋值默认 Token 的形态（$env:MCD_MCP_TOKEN = '<literal>'）
+    assert "MCD_MCP_TOKEN = '" not in text
+    assert 'MCD_MCP_TOKEN = "' not in text

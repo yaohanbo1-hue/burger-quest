@@ -406,18 +406,28 @@ def test_is_error_without_text_still_fails():
     assert "协议错误" in str(ei.value)
 
 
-def test_non_json_text_is_graceful_not_guessed():
-    """content 是不含信封的纯文本：不猜值，原样交给适配器得到空结果。"""
+def test_non_json_text_fails_loudly_for_envelope_tools():
+    """content 是不含信封的纯文本（网关错误页/服务异常）：明确失败，不静默降级。
+
+    2026-10-17 全链路体检：此前 now-time-info 的纯文本响应会静默变成空时间，
+    菜单/门店则会变成「未返回可售餐品/未找到门店」——把协议故障误报成业务空结果。
+    现改为明确 MCPError「响应解析失败」（白名单工具 query-my-coupons /
+    delivery-query-addresses 除外，见 tests/test_mcp_healthcheck.py）。
+    """
     client, _ = make_client(
         raw_results={
             "now-time-info": types.SimpleNamespace(
-                content=[types.SimpleNamespace(text="服务暂时不可用（无 JSON 信封）")]
+                content=[types.SimpleNamespace(text="<html>502 Bad Gateway</html>")]
             )
         }
     )
     with client:
-        t = client.now_time()
-    assert t == {"datetime": "", "time_period": ""}  # 空，而不是编造的时间
+        with pytest.raises(MCPError) as ei:
+            client.now_time()
+    assert "响应解析失败" in str(ei.value)
+    assert "502" in str(ei.value)  # 保留返回开头片段，便于定位
+    # 审计必须留下失败痕迹（note=无 JSON 信封）
+    assert any(c["ok"] is False and c.get("note") == "无 JSON 信封" for c in client.calls)
 
 
 def test_empty_content_list_is_graceful():

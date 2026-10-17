@@ -374,11 +374,20 @@ def coupon_applies(coupon: Coupon, combo: list[PlanItem], estimated_original: in
 def coupon_sets(combo: list[PlanItem], coupons: list[Coupon], estimated_original: int) -> list[list[Coupon]]:
     """生成待验价的优惠券试探序列：最优单券 -> 最优双券（无可用券时只有无券）。
 
+    **容量约束（2026-10-17 契约审计新增）**：官方 calculate-price Schema 把
+    couponId/couponCode 定义在**商品级**（items[].couponId）——每张券必须挂在
+    某件商品上。因此券试探规模不得超过组合商品数：商品只有 1 件时只探单券，
+    绝不生成「挂不下的券」的试探（那会静默丢券、把没提交的券算进方案）。
+
     **最优性边界（2026-10-16 审计如实声明）**：本策略**不保证全局最优**——
     只试探「预期折扣最高的单券」与「最高的两张券组合」，理论上可能存在
     更优的第三张券或非最高折扣券的组合未被覆盖。这是调用次数（每组合 ≤2 次
     验价）与最优性之间的显式权衡：引擎追求「预算内真实可付的较优解」，
     而非穷举所有券组合；实际折扣一律以 calculate-price 权威核验为准。
+    另：双券试探依赖官方接受「同单多件商品各带一张券」——该语义仅有官方
+    Schema 佐证（per-item 字段），**真实服务端接受性待有券账户验证**
+    （MCP_INTEGRATION.md 待验证项）；若官方整单拒绝，既有回退链路
+    （单券 -> 无券）会诚实降级，不会伪造优惠。
 
     2026-10-14 效率优化（每个组合最多 3 次算价，原来最多 8 次）：
     - 有可用券时不再无条件先探「无券基线」——同餐品下无券方案严格被
@@ -391,8 +400,9 @@ def coupon_sets(combo: list[PlanItem], coupons: list[Coupon], estimated_original
     if not applicable:
         return [[]]
     applicable.sort(key=lambda c: (-coupon_expected_discount(c, combo, estimated_original), c.id))
+    capacity = len(combo)  # 每张券需挂在一件商品上（官方 per-item 字段）
     sets: list[list[Coupon]] = [[applicable[0]]]
-    if len(applicable) >= 2:
+    if len(applicable) >= 2 and capacity >= 2:
         sets.append([applicable[0], applicable[1]])
     return sets
 
@@ -583,11 +593,23 @@ def build_plan(
                 "无法给出方案（未编造任何价格）；请稍后重试或检查网络"
             )
         elif budget_filtered:
-            warnings.append(
-                f"没有组合能落在 {format_yuan(c.budget_cents)} 预算内"
-                f"（{budget_filtered} 个候选组合因估算价超出预算被跳过，其余逐一用权威价格核验；未编造任何价格）。"
-                "可尝试：适当提高预算，或减少人数/品类要求"
-            )
+            # 措辞按真实路径分化（2026-10-17 体检：真实运行中「全部预筛跳过」时，
+            # 旧文案「其余逐一用权威价格核验」会暗示做了没做的核验）：
+            # - 有权威核验失败：跳过 X 个 + 核验失败 Y 个，如实并列；
+            # - 无核验失败：全部候选止步于预估筛，明示「未进入权威核验」。
+            if price_failed:
+                warnings.append(
+                    f"没有组合能落在 {format_yuan(c.budget_cents)} 预算内"
+                    f"（{budget_filtered} 个候选组合因估算价超出预算被跳过，"
+                    f"{price_failed} 个进入权威核验但均失败；未编造任何价格）。"
+                    "可尝试：适当提高预算，或减少人数/品类要求"
+                )
+            else:
+                warnings.append(
+                    f"没有组合能落在 {format_yuan(c.budget_cents)} 预算内"
+                    f"（全部候选组合的估算价均已超出预算，未进入权威核验；未编造任何价格）。"
+                    "可尝试：适当提高预算，或减少人数/品类要求"
+                )
         elif nutrition_excluded:
             warnings.append(
                 "候选组合缺少营养数据，无法按营养偏好（蛋白/热量）评估，已全部排除（不猜测营养数值）。"

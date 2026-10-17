@@ -139,6 +139,7 @@ class Constraints:
     store_code: Optional[str] = None
     tastes: tuple = ()  # spicy/sweet/crispy/burger/chicken/beef/fish/veggie/soup
     avoid_tastes: tuple = ()  # 明确不吃的口味（「不吃辣」——避免性约束，优先于正向偏好）
+    spicy_level: Optional[str] = None  # mild=微辣 | medium=中辣/香辣 | extra=特辣/变态辣（仅记录用户表述）
     mood: Optional[str] = None  # happy/sad/tired/night/celebrate/plain
     max_calories: Optional[float] = None
     min_protein_g: Optional[float] = None
@@ -155,6 +156,9 @@ class Constraints:
         """用户是否表达了营养偏好（决定营养数据缺失时是否降权/排除候选）。"""
         return self.max_calories is not None or self.min_protein_g is not None
 
+    def spicy_level_cn(self) -> str:
+        return {"mild": "微辣", "medium": "中辣/香辣", "extra": "特辣/变态辣"}.get(self.spicy_level or "", "")
+
     def to_debug_dict(self, include_raw: bool = False) -> dict:
         """结构化调试表示（默认不含原始输入，避免不必要地回显用户文本）。"""
         d = {
@@ -166,6 +170,7 @@ class Constraints:
             "store_code": self.store_code,
             "tastes": list(self.tastes),
             "avoid_tastes": list(self.avoid_tastes),
+            "spicy_level": self.spicy_level,
             "mood": self.mood,
             "max_calories": self.max_calories,
             "min_protein_g": self.min_protein_g,
@@ -268,3 +273,9 @@ class QuestResult:
     warnings: list = field(default_factory=list)  # 全局提示（MCP 失败等）
     data_sources: dict = field(default_factory=dict)  # 每个数据块的来源说明
     mcp_calls: list = field(default_factory=list)  # 审计：实际发起的 MCP 调用
+    # 真实数据计数（2026-10-17 成就系统新增）：menu/nutrition/coupons/stores 的真实返回条数
+    counts: dict = field(default_factory=dict)
+    # 预算三态统计（2026-10-17 推荐算法完善新增）：
+    # within=确定符合预算（权威总价 ≤ 预算）/ over=超过预算的参考方案 /
+    # unknown=价格缺失无法确认的餐品数（已排除，不猜价格）/ priced=有权威价的餐品数
+    price_states: dict = field(default_factory=dict)

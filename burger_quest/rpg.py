@@ -4,13 +4,20 @@
 - 文案是「包装」，事实是「内核」：所有数字（价格、热量、优惠）都来自 MCP 真实数据，
   本层只负责叙事风格，绝不生成或修改任何数值；
 - 模板 + 输入哈希种子，保证同样输入得到同样任务书（可测试、可复现）；
-- 装备绰号是趣味映射，真实餐品名与真实价格始终并列展示，不遮挡事实。
+- 装备绰号是趣味映射，真实餐品名与真实价格始终并列展示，不遮挡事实；
+- 世界观/剧情线/成就叙事的单一事实来源在 lore.py，本层只做组装。
+
+称号体系（2026-10-17 统一，两个正交维度，勿混淆）：
+- **身份**（BUDGET_TIERS）：按预算档位的趣味身份，任务名/卡片装饰用；
+- **称号**（achievements.level_for_xp）：按累计经验的等级称号，成就进度用。
+两者都是纯虚构装饰，不代表任何真实权益。
 """
 from __future__ import annotations
 
 import hashlib
 from typing import Optional
 
+from .achievements import level_for_xp
 from .models import Constraints, PlanOption, TASTE_CN, format_yuan
 from .planner import _sum_nutrition, classify
 
@@ -85,7 +92,8 @@ def quest_name(c: Constraints, option: Optional[PlanOption]) -> str:
     return f"{scene} · {tier}{taste}（{mode}）"
 
 
-def story(c: Constraints, store_name: str = "", demo: bool = False) -> str:
+def story(c: Constraints, store_name: str = "", demo: bool = False, chapters: Optional[list] = None) -> str:
+    """任务背景故事（确定性：种子为用户输入哈希；chapters 为已解锁剧情章节）。"""
     where = f"『{store_name}』" if store_name else "附近的黄金拱门据点"
     loc = f"，坐标 {c.location}" if c.location else ""
     budget = f"，兜里只剩 {format_yuan(c.budget_cents)}" if c.budget_cents is not None else ""
@@ -110,13 +118,17 @@ def story(c: Constraints, store_name: str = "", demo: bool = False) -> str:
         if demo
         else "智囊团已接入麦当劳 MCP 水晶球，价格与优惠以官方实时数据为准"
     )
-    return (
+    text = (
         f"{opener}，你{people}站在{where}{loc}{budget}{want}。"
         f"{menu_desc}。"
         "作为麦门异世界的见习冒险者，你需要在预算与口味的双重封印下，"
         "从这份菜单中组出属于自己的传说装备。"
         f"{oracle}。祝你好运，冒险者。"
     )
+    # 剧情章节（虚构叙事，仅追加不修改事实；无章节时不追加）
+    for chapter in chapters or []:
+        text += f"【异世界见闻】{chapter.name}——{chapter.summary}"
+    return text
 
 
 def gear_lines(option: PlanOption) -> list[str]:
@@ -147,6 +159,26 @@ def price_lines(option: PlanOption, c: Constraints) -> list[str]:
         else:
             lines.append(f"超出预算：{format_yuan(-option.remaining_cents)}")
     return lines
+
+
+# 用餐渠道 -> 中文（价格适用范围标注用，与 cards._CHANNEL_CN 一致）
+_CHANNEL_CN = {"delivery": "外送（麦乐送）", "takeaway": "到店自取", "dine_in": "堂食"}
+
+
+def price_scope_lines(store, c: Constraints, demo: bool = False) -> list[str]:
+    """价格适用范围说明（2026-10-17 价格专项审计新增）。
+
+    价格只代表「该门店 + 该渠道 + 该次查询」的官方返回；官方价格随门店/
+    时间/渠道/规格变化。命令行与分享卡给出一致口径。
+    """
+    if demo:
+        return ["📌 价格适用范围：演示数据（非实时菜单）——不构成任何真实价格"]
+    channel = _CHANNEL_CN.get(c.dining_mode, c.dining_mode)
+    code = store.code if store is not None else "未知"
+    return [
+        f"📌 价格适用范围：门店编码 {code} · {channel} · 官方实时返回，随门店/时间/渠道/规格变化",
+        "💱 「单价」为官方按商品行返回的行小计归一（数量>1 时 ÷数量）；套餐类餐品（三件套/双全盒/单人餐等）该单价即套餐组合价",
+    ]
 
 
 def nutrition_lines(option: PlanOption, nutrition: list) -> list[str]:

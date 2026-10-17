@@ -292,6 +292,51 @@ code=600010  使用优惠券需要couponId和couponCode
 
 三个元测试保证不退化：矩阵必须 10 类齐全、登记用例名必须真实存在（改名即失败）、每条用例必须有实际断言（防空壳充数）。
 
+## 3.11 全链路体检记录（2026-10-17，真实 Token）
+
+体检范围：环境变量读取 → HTTP 请求 → Bearer Token → Streamable HTTP → 会话管理 → 工具发现 → 工具调用 → 响应解析 → 业务层；连接超时 / 读取超时 / 401 / 403 / 429 / 5xx / 网络断开 / 无效 JSON / 工具不存在 / 参数校验错误 / 服务端业务错误逐项核对。原则：有合法 Token 才做只读真实验证，无条件如实标 BLOCKED，不伪造 PASS；真实模式失败不回退 Demo、不把模拟响应当真实成功。
+
+### 五层验证状态（2026-10-17 15:44 真实 Token 实测）
+
+| 层级 | 状态 | 证据 |
+| --- | --- | --- |
+| L1 服务可访问 | ✅ PASS | 未认证 POST `https://mcp.mcd.cn` → HTTP 403，TCP+TLS 1.4s 完成（服务可达 + 认证层正常；403 是网关对无 Token 请求的预期响应） |
+| L2 认证成功 | ✅ PASS | doctor：Streamable HTTP 会话建立，Bearer Token 通过认证 |
+| L3 工具发现成功 | ✅ PASS | `list_tools` 35 个工具，项目依赖的 8 个全部在位（SDK 2.3.0） |
+| L4 单工具真实调用成功 | ✅ PASS | `now-time-info` 返回服务器时间 2026-10-17T15:44:45 |
+| L5 业务流程真实跑通 | ✅ PASS | `quest "我想吃辣，预算35…" --store-code 1420762`：114 个菜单编码 → 价格发现（0 次详情）→ 组合验价 → 龙焰鸡腿堡 ¥24.00（calculate-price 权威）/ 预算 ¥35 剩 ¥11；8 次调用 2.5s；分享卡正常生成 |
+
+### 失败路径真实核验（同一 Token，全部只读）
+
+| 场景 | 真实结果 |
+| --- | --- |
+| 无效 Token | HTTP 401 → 「MCP Token 无效或已过期（401）」，退出码 2（重构 `_map_sdk_error` 后专项回归通过） |
+| 无效门店编码 DEMO-001 | 官方业务错误 code=400「storeCode门店编码必须全部由数字组成」→ 可读 MCPError，明确停止（未编造餐品） |
+| 外送无保存地址 | 明确说明需先在官方 App 保存配送地址，停止（不伪造外送能力） |
+| 位置命中多家门店 | 5 家真实门店全部列出并暂停，不默默选择 |
+| 预算内无解 | 如实失败 + 可操作建议（顺带修复诊断措辞，见下表 #6） |
+
+### 本次体检修复（均不以牺牲价格真实性为代价）
+
+| # | 问题（体检发现） | 修复 |
+| --- | --- | --- |
+| 1 | 连接超时与读取超时不分，笼统报「连接失败」（排查方向相反） | `httpx2.AsyncClient` 显式 `Timeout(connect=10/read=60/write=30/pool=10)`；read 必须 ≥ 最重工具外层等待（calculate-price 45s）——SDK 默认 5s 读取超时会提前误杀慢但正常的权威算价 |
+| 2 | 403 无专门映射（实测无 Authorization 的 POST 正是 403，与 401 处置不同） | 单独映射 403 + WAF/权限排查建议；`doctor` 分类器同步 |
+| 3 | 无信封纯文本响应（网关错误页/服务异常）被静默降级为空菜单/空门店——把协议故障误报成业务空结果 | 白名单（`query-my-coupons` / `delivery-query-addresses`，联调实测的空态纯文本）外强制 `MCPError`「响应解析失败」，保留返回开头片段 |
+| 4 | 无 Token 时 doctor 完全看不到网络结论 | L1 增加 HTTP 级探针（**绝不携带 Token**）并提前到 Token 检查前；缺 Token 也给出「服务可达」实证 |
+| 5 | 诊断无层级视角，用户分不清「通没通/连没连/能不能用」 | doctor 步骤打 L1–L4 级别标签 + 末尾五层验证状态汇总（L5 指向 `smoke`/`quest`，未执行如实标记） |
+| 6 | 预算空结果措辞不实：全部候选止步预估筛时说「其余逐一用权威价格核验」（真实运行复现，暗示了没做的核验） | 按真实路径分化：全部预筛跳过 → 明示「未进入权威核验」；预筛+核验失败并存 → 两类数量如实并列 |
+
+测试：**372 → 406**（新增 `tests/test_mcp_healthcheck.py` 35 例，更新 1 例随行为变更的旧用例），全量绿；真实链路复跑确认（无效 Token 401 / DEMO-001 业务错误 / 外送无地址 / 多家候选 / 预算无解均按预期）。
+
+### 仍未验证项（状态更新）
+
+1. **优惠券门槛/单位与真实生效**：本账户 `query-store-coupons` / `query-my-coupons` 2026-10-17 真实复测仍返回 0 张——维持未验证，需有券账户；
+2. **外送全链路**：账户无保存地址（「无地址」诚实失败路径已验证）——维持未验证；
+3. **多券提交语义**（双券试探是否被官方接受）：无券可试——维持未验证。注意：第三轮代码分析已发现「`build_calc_payload` 只提交 `coupons[0]`、mock 却按全组券算折扣」的演示/真实分叉（下一波修复项，见 workbuddy.md §5.19），验证前不得把演示叠券效果当作真实效果。
+
+安全记录：本次体检 Token 仅经**进程级环境变量**传递（`MCD_MCP_TOKEN=… python -m …`），未写入任何文件、日志、卡片或审计；doctor/smoke/quest 输出与 JSON 诊断零 Token 泄露（有专项测试断言）。
+
 ## 4. 业务价值
 
 1. **把「查菜单」变成「做决策」**：MCP 提供数据，Burger Quest 提供决策——预算约束下的多组合对比、优惠券叠加验算、营养偏好筛选，直接给出可执行方案；
@@ -328,3 +373,102 @@ code=600010  使用优惠券需要couponId和couponCode
 - MCP Token 只从环境变量或宿主连接器配置读取，不落库、不写日志、不进 Git（`mcp-config.example.json` 仅含占位符）；
 - 引擎不存储任何用户数据；任务输出中的审计记录会自动剔除 token/authorization 字段；
 - 涉及用户账户的工具（我的券、积分、订单）只读，MVP 不做任何写操作。
+
+## 3.12 工具契约审计（2026-10-17，官方 Schema 实证）
+
+审计方法：**以官方定义为准，不靠工具名猜参数**。两个权威来源：
+1. 官方仓库 README（`M-China/mcd-mcp-server`）：端点 `https://mcp.mcd.cn`、Streamable HTTP、`Authorization: Bearer`、限流 600 次/分钟、错误码 401/429——与本文档 §1 一致；
+2. **实时 `list_tools` Schema 快照**：2026-10-17 用真实 Token 经项目自有客户端拉取官方 35 个工具的完整 `inputSchema`，**verbatim 落盘** `tests/fixtures/official_tools_schema.json`（未做任何修改），测试套件据此做回归。
+
+**首个实证差异**：README 工具表列 33 个工具，实时服务实为 35 个（多 `query-promotions` / `query-survey-coupon`，README 最后提交 2026-10-01 早于服务上线）——以实时 Schema 为准；两者均不在 MVP 范围。项目 `TOOLS_USED`(8) + `TOOLS_RESERVED`(11) 全部在官方 35 个内，无虚构工具名。
+
+### 统一契约清单（10 个在用工具，三态标注）
+
+三态定义：**官方定义已核对** = 快照中有 Schema 且本文表逐项核对；**本地测试覆盖** = 测试套件含正常+异常响应用例；**真实服务已验证** = 2026-10-17 用真实 Token 实际调用。
+
+| 工具 | 官方必填参数 | 官方关键可选/枚举 | 引擎传参 | 官方定义已核对 | 本地测试覆盖 | 真实服务已验证 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `now-time-info` | 无 | — | `{}` | ✅ | ✅ | ✅ 返回服务器时间 |
+| `query-nearby-stores` | beType, searchType | city, keyword；**beType 枚举 [1,5]**、searchType [1,2] | beType=1, searchType=2, city, keyword | ✅ | ✅ | ✅ 5 家真实候选 |
+| `query-meals` | storeCode, orderType, beType | beCode(外送必传), reservationDate(预约场景)；beType [1,2,5,6]，orderType [1,2] | 必填齐 + beCode 仅外送 | ✅ | ✅ | ✅ 118 个编码 |
+| `query-meal-detail` | storeCode, orderType, beType, **code** | beCode, reservationDate | 必填齐 + beCode 仅外送 | ✅ | ✅ | ✅ 鸡薯双全盒 |
+| `query-store-coupons` | orderType, beType, storeCode | beCode, reservationDate | 必填齐 + beCode 仅外送 | ✅ | ✅ | ✅ 调用成功，0 张券 |
+| `query-my-coupons` | 无 | **page/pageSize 类型为 string** | `{}`（用官方默认分页） | ✅ | ✅ | ✅ 调用成功，空券包 |
+| `list-nutrition-foods` | 无 | — | `{}` | ✅ | ✅ | ✅ 160 条 |
+| `calculate-price` | storeCode, orderType, beType | **items[]（商品级字段：productCode/quantity/couponId/couponCode/modification/roundList）**、beCode、gmServiceCode、needTableware、reservationDate、withOrder | 必填齐 + items + beCode 仅外送 | ✅ | ✅ | ✅ ¥15.90/¥24.00；600010 双字段契约实测 |
+| `delivery-query-addresses` | 无 | — | `{}` | ✅ | ✅ | ✅ 调用成功，账户无地址 |
+| `delivery-query-stores` | beType, addressId | beType 描述值 2=麦乐送 / 6=团餐（无 enum） | `{beType:2, addressId}` | ✅ | ✅ | ⬜ **待验证：账户无保存地址** |
+
+### 契约核对结论（逐工具，无猜测）
+
+1. **字段传递全部正确**：门店编码（storeCode，官方要求全数字）、餐品编码（`code`，非 mealCode）、orderType/beType 组合、取餐方式（到店自取/堂食均走 orderType=1+beType=1）、配送方式（麦乐送 orderType=2+beType=2+beCode 来自 `delivery-query-stores`）——均与官方 Schema 及描述一致；
+2. **beCode 传递规则锁定**：官方明示「到店自提场景 orderType=1 时 beCode 是无效参数，传了会报错」「麦乐送 orderType=2 必传 beCode」——引擎按 `scene.be_code` 为空即不传，天然合规；`tests/test_tool_contract.py` 对两条链路做端到端断言；
+3. **官方已定义、MVP 不传的能力**（登记备忘，非缺陷）：`reservationDate`（官方：非预约场景不传）、`needTableware`、`withOrder`、`gmServiceCode`、`modification`/`roundList`（套餐换选/特制，§3.6 已登记）、`beType=5` 得来速与 `beType=6` 团餐（引擎未接入，`query-nearby-stores` 的 beType 枚举也只有 [1,5]——外送门店必须走 `delivery-query-stores`，链路设计正确）；
+4. **修复：优惠券 per-item 契约**（此前 §3.9 未覆盖的维度）。官方 Schema 把 `couponId`/`couponCode` 定义在 **items[] 商品级**——每件商品可各带一张券。旧 `build_calc_payload` 只往第一件商品挂 `coupons[0]`，双券试探的第二张被静默丢弃（payload 与单券试探完全相同，白烧一次权威调用，方案却宣称「提交 2 张券」）。已修：第 i 张券挂第 i 件商品；`coupon_sets` 增加**容量守卫**（商品数 < 券数时不生成挂不下的试探，不静默丢券）；mock 改为从 payload 实际提交的券推导折扣，恢复「演示不比真实宽松」不变量。**服务端对同单多券的接受性待有券账户验证**（§3.6）；
+5. **防御性解析加固**：`delivery-query-addresses` 返回容器官方未定义（无参数 Schema、真实账户无地址只验证过空态）→ 用 `_as_list` 兼容 list/`list`/`items`/`data`/`records`/`result`/`addresses` 容器并丢弃无 addressId 条目；餐品详情成功但无名称 → 服务层如实计数警告（原来静默跳过）；null/空列表/类型变化（categories 为 dict、营养文本缺表头、算价 data=null 等）全部有测试锁定「明确为空或丢弃坏条目，绝不猜测填空」；
+6. **仍待验证（无法从官方定义确认）**：① 优惠券 `percent` 字段语义（88 → 0.88 还是 8.8 折，无官方文档且无券账户，当前按 `p/100 if p>1 else p` 启发式并已在代码注释标注）；② 同单多券的服务端接受性（见上）；③ `query-my-coupons` 分页参数为 string 的取值边界（默认分页未触顶，未实测）。
+
+### 契约回归测试（tests/test_tool_contract.py，37 例）
+
+- 快照守卫：35 工具、出处元数据（server/SDK/时间）、`TOOLS_USED`/`TOOLS_RESERVED` ⊆ 官方清单；
+- 端到端传参契约：完整 quest（到店+外送两条链路）捕获每个工具的实际入参，对照官方 Schema 断言「必填齐备 / 无官方外参数（防拼错）/ 枚举合法 / 类型正确」，调用流非空断言防真空校验；
+- 三态台账守卫：在用工具必须登记「官方定义/本地测试/真实验证」状态，未真实验证必须写明阻塞原因——新工具不允许绕过审计。
+
+## 3.13 稳定性配置：超时 / 重试 / 限流 / 追踪 / 日志（2026-10-17）
+
+真实 MCP 请求的稳定性参数，单一事实来源在 `burger_quest/mcp_http.py`，本节是配置说明。
+
+### 超时（连接与读取分离）
+
+| 参数 | 值 | 理由 |
+| --- | --- | --- |
+| `CONNECT_TIMEOUT` | 10s | TCP/TLS 握手。实测 TLS 约 1.4s；不通即网络问题，10s 足够判定 |
+| `READ_TIMEOUT` | 60s | 等待服务端出数据。**必须 ≥ 最重工具的外层等待**（`calculate-price` 45s）——SDK 默认 5s 读取超时会提前误杀慢但正常的权威算价 |
+| `WRITE_TIMEOUT` | 30s | 请求体很小（商品列表），30s 充裕 |
+| `POOL_TIMEOUT` | 10s | 连接池获取 |
+| 外层等待 `_submit` | 默认 30s / `calculate-price` 45s | 任务级总截止；基线实测最慢单次 663ms |
+
+### 重试（有上限、防风暴、尊重服务端）
+
+| 维度 | 规则 |
+| --- | --- |
+| 可重试 | 瞬时网络错误 / 5xx（最多 3 次尝试，退避 0.5/1/2s）；429（最多 2 次尝试，退避 2/4s） |
+| 不重试 | 401/403（确定性凭据/权限）、业务错误（信封 success=false）、协议错误（isError） |
+| **Retry-After** | 服务端 429/503 响应头给出时按它等待，封顶 `RETRY_AFTER_CAP=30s`（秒形态；HTTP-date 形态忽略走内置退避） |
+| **抖动** | 所有退避 × 随机系数 50%–100%（只减不增，避免多客户端叠加限流） |
+| **会话预算** | 单客户端实例累计最多 `MAX_SESSION_RETRIES=15` 次重试——杜绝多个失败请求逐个重试的风暴 |
+| **连续失败断路** | 连续 `MAX_CONSECUTIVE_NETWORK_FAILURES=3` 次网络类失败后停止重试、快速失败（网络整体不可达时避免每个调用耗 10s 连接超时）；一次成功即复位 |
+| **副作用禁重试** | `NON_IDEMPOTENT_TOOLS`（create-order / cancel-order / auto-bind-coupons / draw-lottery / mall-create-order / party-order-create / delivery-create-address）一律单次尝试——重试下单/支付/领券会造成重复副作用。引擎 MVP 只读不会调用，此清单是硬护栏 |
+
+### 追踪与日志
+
+- **trace_id**：每个客户端实例生成（8 位 hex），进入调用审计与诊断日志，用于关联一次任务的全部调用（MCP 协议层无自定义 request id 出口，不自造协议字段）；
+- **诊断日志**（默认关闭）：设置环境变量 `BURGER_QUEST_LOG=<文件路径>` 后，每次尝试/重试/放弃写入一行 JSON（时间、trace、工具、尝试次数、HTTP 状态、错误类型、耗时）。**脱敏硬约束**：token/authorization/headers/cookie 类键整体打码、Bearer 凭据打码、MCD_MCP_TOKEN 值双保险替换——测试锁定零泄露；写失败静默忽略，不影响主流程；
+- 面向用户的错误提示保持简洁（原因 + 下一步建议），详细诊断只在日志。
+
+### 传输层协议边界
+
+Streamable HTTP 的 SSE 流由官方 SDK 在传输层完成聚合；客户端只消费最终 `content`（文本块按序拼接后提取信封 JSON），**不自研 SSE/JSON-RPC 解析，不把三种响应形态混为一谈**（`parse_tool_text` 注释与测试锁定）。
+
+## 3.14 餐品与价格专项审计（2026-10-17，真实 Token）
+
+### 真实证据（门店 1420762，2026-10-17 17:01，只读）
+
+- `query-meals`：116 个菜单编码；分类/tags 为官方标签体系（tags 分布：单品 20、麦金卡 15、套餐 14、上新 11、100%纯牛肉 11…）；
+- `calculate-price`（3 件各 1 件）：`originalPrice=7960 == sum(subtotal)=7960`、`price=7960`、`discount=0`、无 `deliveryFee` 字段（到店）；**金额单位为分**（1590=¥15.90），与引擎解释一致；
+- `calculate-price`（同品 quantity=2）：`subtotal=3180=2×1590` → 行小计语义确认，`extract_product_prices` 的 ÷数量 归一化正确；
+- **新发现字段 `takeWayList`**（可取餐方式：堂食/外带取餐柜）：官方返回但引擎未使用（场景由 orderType/beType 表达）——登记备忘，非缺陷；
+- 账户券池为空：`query-store-coupons`/`query-my-coupons` 均 0 张，`discount=0`——优惠展示链路本次无可验样本（待有券账户）。
+
+### 审计结论（价格链路）
+
+1. **单位与转换**：`_to_cents_official` 整数=分、小数/带点字符串=元，防御官方口径变更的 100 倍误差；测试固化 12 种输入（含 bool/空串/大整数/负值）；
+2. **价格四段语义**：原价（originalPrice）/ 已核实优惠（discount）/ 配送费（官方返回时）/ 应付总价（price=用户最终支付）——全部只认 calculate-price 权威返回，缺失总价即 ok=False 停止出方案；
+3. **行小计归一**：quantity>1 时 ÷数量；缺数量按 1、quantity=0 除零保护、缺小计跳过——「忠实提取」，0/负价由服务层结合语境排除并明示；
+4. **空/零/负价格**：排除 + 明示（0 元不免费进组合、不充当预算空间）；全部无价格 → 诚实失败，措辞「价格暂不可验证」；
+5. **套餐价与单价的区分**：官方按商品行返回行小计——套餐类餐品（三件套/双全盒/单人餐）该单价即套餐组合价；真实 tags 只有「套餐/单品」标签、组合名（三件套等）不进标签，**不按名称推断价格类型**，改为在卡片/命令行用「单价语义说明」讲清官方口径；
+6. **价格适用范围**（本次新增展示）：卡片/命令行/Markdown 三处一致标注「门店编码 + 用餐渠道 + 生成时间；价格随门店/时间/渠道/规格变化」；演示数据明示「非实时、不构成任何真实价格」；
+7. **无价餐品不进预算**：planner 池过滤 `price_cents is not None`，测试锁定无价餐品不出现在任何方案、排除时明示；
+8. **规格/可选项**：`query-meal-detail` 的 rounds（换选项）与 modification（特制）仍未解析展示（§3.6 已登记），接口层已预留——不猜测、不编造。
+
+测试：新增 `tests/test_price_display.py` 32 例（单位转换 12 种/四段语义/行小计归一/空零负/预算边界相等与超 1 分/无价餐品排除/排序确定性/三处适用范围提示/演示数据明示）；全量 **475 通过**。

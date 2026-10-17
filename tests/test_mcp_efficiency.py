@@ -20,6 +20,7 @@ from burger_quest.mcp_base import MCPError, scene_for_mode, summarize_calls
 from burger_quest.mcp_http import (
     BACKOFF_429,
     BACKOFF_NETWORK,
+    JITTER_RANGE,
     MAX_ATTEMPTS_429,
     MAX_ATTEMPTS_NETWORK,
     HttpMCPClient,
@@ -247,14 +248,21 @@ def test_server_error_5xx_retried():
 
 
 def test_retry_decision_table():
-    """重试决策表：401/业务错误不重试；429/5xx/网络有限重试。"""
+    """重试决策表：401/业务错误不重试；429/5xx/网络有限重试。
+
+    2026-10-17 稳定性增强：退避值带随机抖动（50%-100%），精确等式改为区间断言。
+    """
     client = HttpMCPClient(token="x")
     assert client._retry_backoff("t", MCPError("t", "x", 401), 1) is None
-    assert client._retry_backoff("t", MCPError("t", "限流", 429), 1) == BACKOFF_429[0]
+    # 直接验证抖动区间（单次采样落在 50%-100% 之间）
+    v = client._retry_backoff("t", MCPError("t", "限流", 429), 1)
+    assert BACKOFF_429[0] * JITTER_RANGE[0] <= v <= BACKOFF_429[0] * JITTER_RANGE[1]
     assert client._retry_backoff("t", MCPError("t", "限流", 429), 2) is None
-    assert client._retry_backoff("t", MCPError("t", "x", 500), 1) == BACKOFF_NETWORK[0]
+    v5 = client._retry_backoff("t", MCPError("t", "x", 500), 1)
+    assert BACKOFF_NETWORK[0] * JITTER_RANGE[0] <= v5 <= BACKOFF_NETWORK[0] * JITTER_RANGE[1]
     assert client._retry_backoff("t", MCPError("t", "x", 500), 3) is None
-    assert client._retry_backoff("t", MCPError("t", "MCP 连接失败：ssl error"), 1) == BACKOFF_NETWORK[0]
+    vn = client._retry_backoff("t", MCPError("t", "MCP 连接失败：ssl error"), 1)
+    assert BACKOFF_NETWORK[0] * JITTER_RANGE[0] <= vn <= BACKOFF_NETWORK[0] * JITTER_RANGE[1]
     assert client._retry_backoff("t", MCPError("t", "业务错误（code=400）", 400), 1) is None
 
 

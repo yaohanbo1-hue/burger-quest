@@ -304,3 +304,81 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 UnicodeEncodeError 崩溃（Linux 不暴露）→ cli.main() 入口 _ensure_utf8_output()
 （reconfigure UTF-8+replace），本地模拟 cp1252 验证 doctor exit 2 / demo exit 0，
 新增窄代码页回归测试；测试 323 → 324。
+
+## 5.18 MCP 全链路体检（2026-10-17，真实 Token）
+
+用户要求对真实 MCP 链路做一次全链路体检（环境变量 → HTTP → Bearer → Streamable HTTP → 会话 → 工具发现 → 调用 → 解析 → 业务层；超时/401/403/429/5xx/断网/无效 JSON/工具不存在/参数校验/业务错误逐项；五层分级输出状态；真实模式不回退 Demo；无 Token 标 BLOCKED 不伪造 PASS）。
+
+**五层验证状态（真实 Token，2026-10-17 15:44）**：L1 服务可访问 PASS（未认证 POST → HTTP 403，TCP+TLS 1.4s）；L2 认证成功 PASS（会话建立）；L3 工具发现 PASS（35 工具，依赖 8 个在位）；L4 单工具调用 PASS（now-time-info 返回服务器时间）；L5 业务流程 PASS（quest --store-code 1420762：114 编码 → 价格发现 0 详情 → 龙焰鸡腿堡 ¥24.00 权威 / ¥35 预算剩 ¥11，8 次调用 2.5s，分享卡正常）。失败路径真实核验：无效 Token → 401 exit 2；DEMO-001 → 官方 400 业务错误明确停止；外送无地址 → 诚实失败；多家门店 → 5 家列出暂停；预算无解 → 如实失败。
+
+**修复 6 项（体检发现，均不牺牲价格真实性）**：
+1. 连接超时/读取超时不分 → httpx2.AsyncClient 显式 Timeout(connect=10/read=60/write=30/pool=10)；read ≥ 最重工具外层等待 45s（SDK 默认 5s 会误杀慢算价）；
+2. 403 无专门映射（实测无 Authorization POST 正是 403）→ 单独映射 + WAF/权限建议，与 401 分开；
+3. 无信封纯文本响应静默降级为空菜单/空门店 → 白名单（query-my-coupons/delivery-query-addresses，联调实测空态）外强制 MCPError「响应解析失败」；
+4. doctor 无 Token 看不到网络结论 → L1 HTTP 级探针（绝不携带 Token）提前到 Token 检查前；
+5. 诊断无层级视角 → doctor 步骤打 L1-L4 标签 + 五层状态汇总（L5 指向 smoke/quest，未执行如实标记）；
+6. 预算空结果措辞不实（真实运行复现「其余逐一用权威价格核验」但余数为 0）→ 按真实路径分化措辞。
+
+**测试 372 → 406**（tests/test_mcp_healthcheck.py 35 例 + 更新 1 例旧行为用例）；全量绿；compileall / git diff --check 干净；doctor 无 Token exit 2 不回退 Demo；Token 仅经进程环境变量使用，未写入任何文件，输出零泄露（测试断言）。
+
+**下一波（已验证前提下）**：① 有券账户结案优惠券门槛/单位与双券提交语义，并修复已发现的双券缺陷（build_calc_payload 只提交 coupons[0]、mock 按全组算折扣导致演示比真实宽松）；② 有保存地址账户验证外送全链路；③ 套餐换选/特制选项（rounds/modification）展示。
+
+## 5.19 工具契约审计（2026-10-17，官方 Schema 实证）
+
+用户要求基于官方文档与实际可访问的工具定义做契约审计（不许按工具名猜参数；无法确认的标待验证；三态清单；防御性解析；自动测试覆盖正常+异常响应；不篡改官方定义、不伪造真实响应）。
+
+**取证**：官方仓库 README（端点/Streamable HTTP/Bearer/600 次每分钟/401/429，与项目记录一致；README 工具表 33 个）；用真实 Token 经项目自有客户端 `list_tools` 拉取官方 35 个工具完整 inputSchema，**verbatim 落盘** `tests/fixtures/official_tools_schema.json`——实证差异：实时服务比 README 多 `query-promotions`/`query-survey-coupon`（不在 MVP 范围），以实时 Schema 为准。
+
+**契约核对结论**：10 个在用工具的名称/必填/可选/类型/枚举/返回语义逐项与官方 Schema 一致；beCode 规则（到店禁传、麦乐送必传）官方明示且引擎天然合规；`code`/`storeCode`/`orderType`/`beType`/`addressId` 传递全部正确。
+
+**审计发现并修复（1 个真缺陷 + 3 处加固）**：
+1. **优惠券 per-item 契约缺陷**：官方 Schema 把 couponId/couponCode 定义在 items[] 商品级。旧 `build_calc_payload` 只挂 `coupons[0]`——双券试探第二张被静默丢弃（payload 与单券试探相同，白烧权威调用，方案却宣称提交 2 张券）；mock 又按传入列表全量算折扣（演示比真实宽松）。已修：券按序号挂不同商品 + `coupon_sets` 容量守卫（商品数<券数不生成挂不下的试探）+ mock 从 payload 实际提交推导折扣。**服务端同单多券接受性待有券账户验证**（已登记 §3.6/§3.12）。
+2. `delivery-query-addresses` 返回容器官方未定义 → `_as_list` 兼容 7 种容器键 + 丢弃无 addressId 条目；
+3. 餐品详情成功但无名称 → 服务层如实计数警告（原静默跳过）；
+4. null/空列表/类型变化（categories 为 dict、营养缺表头、算价 data=null 等）测试锁定「明确为空/丢弃坏条目，不猜测填空」。
+
+**测试 406 → 443**（tests/test_tool_contract.py 37 例：快照守卫/端到端传参契约双链路/beCode 规则/券挂载与容量/mock 保真/异常响应矩阵/三态台账守卫）；重写 test_planner_upgrade 1 例（旧用例把「1 件商品提交 2 张券」的缺陷行为当成正确语义）；全量绿；demo 双券场景输出不变（现在是真的提交了两张）；真实 quest 复跑无回归。
+
+**待验证**：① 有券账户：券 percent 语义（88→0.88 或 8.8 折）、门槛/单位、同单多券服务端接受性；② 有地址账户：delivery-query-stores。
+
+## 5.20 稳定性增强 + 餐品价格专项审计（2026-10-17）
+
+### 稳定性增强（真实请求）
+
+- **超时统一**：httpx2.AsyncClient 显式 `Timeout(connect=10/read=60/write=30/pool=10)`——read 必须 ≥ calculate-price 外层 45s（SDK 默认 5s 会误杀慢算价）；配置说明落 MCP_INTEGRATION.md §3.13；
+- **重试策略**：网络/5xx 最多 3 次、429 最多 2 次；**Retry-After 尊重+封顶 30s**（event hook 捕获秒形态，date 形态忽略）；退避 × 抖动 50%-100%（只减不增）；**会话重试预算 15 次**（防多失败请求风暴）；**连续 3 次网络失败断路**（成功即复位）；
+- **副作用禁重试**：NON_IDEMPOTENT_TOOLS（下单/取消/领券/抽奖/建地址等 7 个）一律单次尝试——引擎 MVP 只读不会调用，清单是硬护栏；
+- **trace + 脱敏日志**：实例级 trace_id 进审计与日志；`BURGER_QUEST_LOG=<路径>` 开启 JSONL 诊断日志，token/authorization/headers 类键打码 + Bearer 打码 + Token 值双保险替换，测试锁定零泄露；默认关闭零副作用；
+- 协议边界：SSE 由官方 SDK 传输层聚合，只消费最终 content（多文本块按序拼接），不自研 SSE/JSON-RPC 解析；
+- 测试：tests/test_stability.py 17 例（Retry-After/封顶/抖动区间/预算/断路/副作用禁重试/日志脱敏/日志默认关闭/非法响应仍明确失败）。
+
+### 餐品与价格专项审计（真实 Token，门店 1420762，2026-10-17 17:01）
+
+- 实证：116 个菜单编码；3 件商品 originalPrice=7960=sum(subtotal)，price=7960，discount=0（账户无券），到店无 deliveryFee；**金额单位=分**（1590=¥15.90）；quantity=2 → subtotal=3180=2×1590 行小计语义确认，÷数量归一正确；
+- 新发现官方字段 takeWayList（堂食/外带取餐柜）：未使用，登记备忘；
+- 修复：① 卡片/CLI/Markdown 三处新增**价格适用范围**（门店编码+渠道+生成时间；随门店/时间/渠道/规格变化）与**单价语义说明**（行小计归一；套餐类餐品该单价即组合价——不按名称推断价格类型）；② 全无价格时措辞改「价格暂不可验证」；③ 详情成功但无名称的计数（契约审计已加）；
+- 测试：tests/test_price_display.py 32 例（单位转换 12 种/四段语义/行小计归一/空零负/预算边界相等与超 1 分/无价餐品不进组合/排序确定性/三处适用范围/演示数据明示非实时）；README 新增 4.5 用户向价格说明；
+- **测试 443 → 492 全绿**；真实 quest 复跑无回归（¥24.00 权威价，范围提示正常）；demo 卡明确演示数据非实时。
+
+### 仍未验证
+
+有券账户（discount 展示链路/多券接受性）、有地址账户（外送门店）、套餐 rounds/modification 展示。
+
+## 5.21 Windows 启动体验完善（2026-10-17，本机 PS 5.1 真实验证）
+
+对既有三个脚本（setup/run/check）按「Windows 一键启动」10 条要求审计，补缺口后真实验证：
+
+**新增能力**：`run-windows.ps1` 命令可选（缺省显示帮助——查看帮助）；帮助含命令清单、退出码图例（0/1/2）、Ctrl+C 安全退出指引、Token 配置指引；失败时末尾回显退出码含义。
+
+**真实验证（PS 5.1.26100，非管理员，本机实跑）**：
+- 三脚本 PS 解析 0 错误、BOM 在位；
+- 从 `C:\`（错误工作目录）不带参数运行 → 帮助正常（脚本自定位仓库根）；
+- 中文参数全链路：`demo "我想吃辣，预算35，外送到南山科技园，一个人" --json` → JSON 内容正确（麦辣鸡腿堡+鸡翅 ¥34 预算内）——脚本→参数→Python→UTF-8 输出链路健康；
+- `quest` 无 Token → 退出码 2、零结果文件、**未回退 Demo**；`demo "预算5块"` → 退出码 1（诚实失败）；正常 demo → 0；
+- `check-mcp-windows.ps1` 带真实 Token → 退出码 0（doctor L1–L4 全过）；
+- 中文+空格路径（`D:\麦门 测试\` junction，无需管理员）→ 退出码 0；
+- 全量 496 测试通过（test_windows_scripts.py 15→19：新增帮助/退出码/安全退出/禁提权/禁安全软件操作/Token 无默认值断言）。
+
+**编码结论**：脚本输出本身是正确的 UTF-8/宽字符；经管道或 `>` 重定向捕获时父进程按系统代码页（中文 Windows 默认 GBK）重编码——Windows 控制台机制，交互式窗口显示正常。README 3.1.1 给出 UTF-8 捕获方法（设 `[Console]::OutputEncoding` 或直接用 `--json`/`--card-html` 让 Python 写文件）。
+
+**未验证**：全新干净 Windows 环境（无 Python、无 .venv）的交互式 setup 全流程（本机已有环境）；CI windows-latest job 覆盖「无 Token 管道路径 + doctor 缺 Token exit 2 + CLI/离线演示」。完整干净机器流程标注为未验证。

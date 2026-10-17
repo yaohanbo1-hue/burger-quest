@@ -341,12 +341,15 @@ def run_quest(
         )
         return result
     if not unit_prices:
-        result.warnings.append("没有获取到任何真实价格，无法生成方案（未编造任何价格）")
+        result.warnings.append(
+            "餐品已查询到，但没有获取到任何真实价格（价格暂不可验证）——无法生成方案（未编造任何价格）"
+        )
         return result
 
     named: list[MenuItem] = []
     detail_failures = 0
     detail_skipped = 0
+    detail_no_name = 0
     for m in shortlist:
         if m.code in excluded:
             continue  # 坏商品已被隔离排除，不再回退查详情（省调用、不引入无价商品）
@@ -362,12 +365,16 @@ def run_quest(
         else:
             detail_skipped += 1
         if not name:
+            # 2026-10-17 契约审计：详情成功但未返回名称——如实计数，不静默跳过
+            detail_no_name += 1
             continue
         named.append(
             MenuItem(code=m.code, name=name, category=m.category, price_cents=None, tags=m.tags)
         )
     if detail_failures:
         result.warnings.append(f"{detail_failures} 个餐品详情查询失败，已跳过")
+    if detail_no_name:
+        result.warnings.append(f"{detail_no_name} 个餐品详情未返回名称，已跳过（不编造餐品名）")
     if detail_skipped:
         result.warnings.append(
             f"{detail_skipped} 个餐品名称直接取自行算价返回（productList.productName），省下 {detail_skipped} 次详情查询"
@@ -406,7 +413,9 @@ def run_quest(
             f"{non_positive} 个餐品返回了非正价格（0 或负数），已按价格未知排除——不用可疑价格规划"
         )
     if not priced:
-        result.warnings.append("没有获取到任何真实价格，无法生成方案")
+        result.warnings.append(
+            "餐品已查询到，但没有获取到任何真实价格（价格暂不可验证），无法生成方案"
+        )
         return result
 
     # 6. 优惠券（尽力而为）
@@ -471,6 +480,13 @@ def run_quest(
         "nutrition": nutrition_note,
         "price": "calculate-price（价格发现 + 组合验价，金额单位：分）",
         "mode": _demo_note(client),
+    }
+    # 真实数据计数（成就系统评估用；无方案时也保留已取得的计数）
+    result.counts = {
+        "menu": len(skeleton),
+        "nutrition": len(nutrition),
+        "coupons": len(coupons),
+        "stores": len(result.store_candidates) if result.store_candidates else (1 if result.store else 0),
     }
     result.mcp_calls = list(client.calls)
 

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burger Quest · 麦门异世界</title>
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<header class="topbar">
+  <div class="brand">
+    <span class="arch" aria-hidden="true">M</span>
+    <span class="brand-name">Burger Quest · 麦门异世界</span>
+    <span class="tag">NON-OFFICIAL FAN PROJECT</span>
+  </div>
+  <div class="conn" id="conn" role="status" aria-live="polite">
+    <span class="dot" id="conn-dot" data-state="unknown"></span>
+    <span id="conn-text">正在检测连接…</span>
+    <button type="button" id="btn-recheck" class="btn btn-small">重新检测</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="panel" aria-labelledby="h-status">
+    <h2 id="h-status">连接状态</h2>
+    <ul class="levels" id="levels"></ul>
+    <p class="hint" id="status-hint" hidden></p>
+    <details class="details">
+      <summary>没有 Token？</summary>
+      <p>到 <b>open.mcd.cn/mcp</b> 手机号登录申请；配置后重启本界面。未配置时真实查询会明确报错，<b>不会</b>自动切换演示数据。</p>
+    </details>
+  </section>
+
+  <section class="panel" aria-labelledby="h-query">
+    <h2 id="h-query">发布任务</h2>
+    <form id="quest-form" novalidate>
+      <label class="field">
+        <span class="label">你的需求（预算/口味/人数/地点/取餐方式）</span>
+        <textarea id="text" name="text" rows="3" maxlength="500" required
+          placeholder="例如：我想吃辣，预算35，在深圳市南山区科技园，一个人，到店自取"></textarea>
+      </label>
+      <label class="field">
+        <span class="label">门店编码（可选，留空按位置查询）</span>
+        <input id="store_code" name="store_code" type="text" inputmode="numeric" maxlength="16"
+          placeholder="例如：1420762（可先用下方门店查询获取）">
+      </label>
+      <div class="actions">
+        <button type="submit" id="btn-quest" class="btn btn-primary">开始任务</button>
+        <button type="button" id="btn-stores" class="btn">查询附近门店</button>
+        <button type="button" id="btn-progress" class="btn">查看本地进度</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" id="stores-panel" aria-labelledby="h-stores" hidden>
+    <h2 id="h-stores">门店结果</h2>
+    <div id="stores-body"></div>
+  </section>
+
+  <section class="panel" id="result-panel" aria-labelledby="h-result" hidden>
+    <h2 id="h-result">任务结果</h2>
+    <div id="result-body" aria-live="polite"></div>
+  </section>
+
+  <section class="panel" id="progress-panel" aria-labelledby="h-progress" hidden>
+    <h2 id="h-progress">本地虚拟进度</h2>
+    <div id="progress-body"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>非麦当劳官方项目，参赛作品，仅供娱乐参考；餐品信息、价格及供应状态以麦当劳官方渠道实时结果为准。游戏进度为应用内虚拟进度，与麦当劳官方无关。</p>
+</footer>
+<script src="/app.js" defer></script>
+</body>
+</html>

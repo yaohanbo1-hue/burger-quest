@@ -41,7 +41,7 @@ include = ["burger_quest*"]
 
 # 演示数据随包分发：pip install 后 demo 模式仍可离线运行
 [tool.setuptools.package-data]
-burger_quest = ["data/*.json"]
+burger_quest = ["data/*.json", "web_assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

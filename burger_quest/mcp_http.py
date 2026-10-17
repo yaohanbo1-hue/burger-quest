@@ -33,9 +33,45 @@ SDK 版本兼容（实测 mcp 1.27.2 / 2.3.0，2026-10-13 联调发现并处理�
   -> _raise_if_protocol_error / _submit 异常映射转 MCPError。
 两条通道都不允许「未知格式猜一个值」后静默放过。
 
+超时与传输层（2026-10-17 全链路体检新增）：
+- 连接超时与读取超时**分离**：httpx2.AsyncClient 显式配置
+  Timeout(connect=10s, read=60s, write=30s, pool=10s)。read 必须大于最重工具
+  的外层等待（calculate-price 45s），否则 SDK 默认 5s 读取超时会提前误杀
+  慢但正常的权威算价；外层 _submit 仍是任务级总截止（30s/45s）。
+- 错误映射区分 ConnectTimeout（网络/TLS 握手问题）与 ReadTimeout（服务端
+  出数慢或被限速）——两者排查方向完全相反，之前都笼统报「连接失败」；
+- 新 SDK 把 401/403/429 包装成 JSON-RPC 错误且不暴露状态码：403 与 401
+  的处置不同（401=Token 失效，403=无权限/被 WAF 拦截，实测无 Authorization
+  的 POST 正是 403），必须分别给出排查建议。
+
+无信封响应（2026-10-17 体检新增）：
+- 联调实测：除 query-my-coupons（无券时返回纯文本「暂无可用优惠券」）与
+  delivery-query-addresses（无地址时可能返回纯文本说明）外，所有工具都返回
+  「说明文字 + ## Original Response + JSON 信封」。这些工具若返回纯文本，
+  说明是网关错误页/服务异常，**必须明确失败**（MCPError「响应解析失败」），
+  不允许静默降级成空菜单/空门店——那会把协议故障误报成业务空结果。
+
 安全约定：
 - Token 只从环境变量 MCD_MCP_TOKEN 或调用方显式传入，绝不落库、绝不写日志；
-- 审计记录（MCPClient.calls）会自动剔除 token/authorization 字段。
+- 审计记录（MCPClient.calls）会自动剔除 token/authorization 字段；
+- 详细诊断信息（尝试次数/HTTP 状态/错误类型/耗时/trace）写**脱敏日志**
+  （burger_quest/diagnostics.py，设置 BURGER_QUEST_LOG 才启用），面向用户的
+  错误提示只给简洁原因与下一步建议。
+
+重试策略（2026-10-17 稳定性增强，有上限、防风暴）：
+- 重试对象：瞬时网络错误/5xx（最多 3 次尝试）、429（最多 2 次尝试）；
+  401/403/业务错误（信封 success=false）/协议错误（isError）**不重试**；
+- **Retry-After**：服务端在 429/503 响应头给出时按它等待（封顶 30s），
+  否则用内置退避（0.5/1/2s 或 2/4s）× 随机抖动（50%-100%）；
+- **会话重试预算**：单个客户端实例累计最多 15 次重试，杜绝「多个失败
+  请求逐个重试」的风暴；
+- **连续网络失败断路**：连续 3 次网络类失败后停止重试并快速失败
+  （网络整体不可达时避免每个调用都耗 10s 连接超时）；
+- **副作用工具禁重试**：写操作/账户变更类工具（NON_IDEMPOTENT_TOOLS）
+  一律单次尝试——重试下单/支付/领券可能造成重复副作用；
+- **追踪上下文**：每个客户端实例生成 trace_id，进入审计与诊断日志，
+  用户可据此关联一次任务的全部调用（协议层无自定义 request id 出口，
+  不自造协议字段）。
 """
 from __future__ import annotations
 
@@ -44,11 +80,14 @@ import concurrent.futures
 import inspect
 import json
 import os
+import random
 import re
 import threading
 import time
+import uuid
 from typing import Optional
 
+from .diagnostics import log_event
 from .mcp_base import (
     CACHEABLE_TTL,
     MCPClient,
@@ -64,20 +103,57 @@ from .mcp_base import (
     build_calc_payload,
     check_envelope,
     parse_tool_text,
+    _as_list,
+    _first,
 )
 
 MCD_MCP_URL = "https://mcp.mcd.cn"
-DEFAULT_TIMEOUT = 30.0  # 默认单次调用超时（基线实测：最慢单次 663ms，30s 充裕）
+DEFAULT_TIMEOUT = 30.0  # 默认单次调用外层等待（基线实测：最慢单次 663ms，30s 充裕）
 TOOL_TIMEOUTS = {"calculate-price": 45.0}  # 算价最重，放宽到 45s
+
+# 传输层超时（2026-10-17 体检新增）。read 必须 >= 最重工具的外层等待（45s），
+# 否则 SDK 默认 5s 读取超时会提前误杀慢但正常的 calculate-price。
+CONNECT_TIMEOUT = 10.0   # TCP/TLS 握手：不通就是网络问题，10s 足够
+READ_TIMEOUT = 60.0      # 等待服务端出数据：大于最重工具外层等待 45s
+WRITE_TIMEOUT = 30.0     # 发送请求体（本引擎请求体很小）
+POOL_TIMEOUT = 10.0      # 从连接池拿连接
+
+# 允许返回「无 JSON 信封纯文本」的工具（联调实测的正常空态，2026-10-17 体检）：
+# - query-my-coupons：无券时官方返回纯文本「暂无可用优惠券」；
+# - delivery-query-addresses：无保存地址时可能返回纯文本说明。
+# 其余工具无信封一律按「响应解析失败」明确报错，不静默降级为空结果。
+PLAIN_TEXT_TOOLS = frozenset({"query-my-coupons", "delivery-query-addresses"})
 
 # 重试策略（有限次数，绝不无限重试）
 MAX_ATTEMPTS_NETWORK = 3   # 瞬时网络错误 / 5xx
 MAX_ATTEMPTS_429 = 2       # 限流：少试+长退避，尊重 600 次/分钟
 BACKOFF_NETWORK = (0.5, 1.0, 2.0)   # 第 1/2/3 次尝试前的等待（秒）
 BACKOFF_429 = (2.0, 4.0)
+# 稳定性增强（2026-10-17）：
+MAX_SESSION_RETRIES = 15              # 单客户端实例累计重试上限（防多请求重试风暴）
+MAX_CONSECUTIVE_NETWORK_FAILURES = 3  # 连续网络类失败次数上限（断路：网络整体不可达时快速失败）
+RETRY_AFTER_CAP = 30.0                # 尊重服务端 Retry-After，但单次等待封顶秒数
+JITTER_RANGE = (0.5, 1.0)             # 抖动系数区间（只减不增，避免叠加限流）
+# 有副作用的工具：重试可能造成重复下单/支付/领券/地址创建——一律单次尝试。
+# 引擎 MVP 只读，不会调用这些工具；此清单是给未来调用方的硬护栏（契约见 MCP_INTEGRATION.md）。
+NON_IDEMPOTENT_TOOLS = frozenset(
+    {
+        "create-order",
+        "cancel-order",
+        "auto-bind-coupons",
+        "draw-lottery",
+        "mall-create-order",
+        "party-order-create",
+        "delivery-create-address",
+    }
+)
 _NETWORK_HINTS = (
     "connect", "ssl", "network", "timed out", "timeout", "unreachable", "resolve",
     "closed abruptly", "incomplete", "reset by peer", "broken pipe", "remote end closed",
+    # 2026-10-17 体检新增的超时分类专用标记（对应 _map_sdk_error 的新消息）。
+    # 不加大而化之的「连接」——旧路径的「MCP 连接失败」消息靠其内嵌 ASCII 提示词
+    # 判重试，语义不变；测试级确定性错误不会被误判为可重试。
+    "读取超时", "连接超时", "连接池超时", "写入超时", "对端", "重置",
 )
 
 
@@ -110,9 +186,12 @@ def _import_stream_client():
 
 
 def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -> MCPError:
-    """把 SDK/网络异常翻译成用户可懂的 MCPError（含 401/429/5xx 官方错误码语义）。
+    """把 SDK/网络异常翻译成用户可懂的 MCPError（含 401/403/429/5xx 官方错误码语义）。
 
     http_status：自建 http_client 的 event hook 记录的真实 HTTP 状态码（新版 SDK 会吞掉它）。
+
+    超时区分（2026-10-17 体检）：ConnectTimeout=网络/TLS 握手失败，ReadTimeout=服务端
+    出数慢——排查方向相反（换网络 vs 降频/稍后重试），之前笼统报「连接失败」。
     """
     if http_status == 401 or "401" in str(e):
         return MCPError(
@@ -121,11 +200,47 @@ def _map_sdk_error(tool: str, e: Exception, http_status: Optional[int] = None) -
             "并更新环境变量 MCD_MCP_TOKEN 或 .env 文件中的值",
             401,
         )
+    if http_status == 403 or "403" in str(e):
+        # 实测：不带 Authorization 的 POST 正是 403（网关拒绝）；与 401（Token 失效）分开
+        return MCPError(
+            tool,
+            "MCP 服务拒绝访问（403）：可能是网络代理/WAF 拦截，或 Token 账户无该资源权限；"
+            "请更换网络环境重试，或到 https://open.mcd.cn/mcp 确认账户权限",
+            403,
+        )
     if http_status == 429 or "429" in str(e):
         return MCPError(
             tool,
             "触发麦当劳 MCP 限流（429，每 Token 每分钟 600 次）：请稍后重试",
             429,
+        )
+    # 超时/传输层细分（在此之前：确定性错误不重试，重试逻辑见 _retry_backoff）
+    err_text = type(e).__name__ + " " + str(e)
+    if "ReadTimeout" in err_text or "读取超时" in err_text:
+        return MCPError(
+            tool,
+            f"MCP 读取超时：已建立连接但服务端 {READ_TIMEOUT:.0f} 秒内未返回数据"
+            "（网络正常但服务端出数慢或被限速；请稍后重试，持续出现请反馈）",
+            408,
+        )
+    if "ConnectTimeout" in err_text or "连接超时" in err_text:
+        return MCPError(
+            tool,
+            f"MCP 连接超时：{CONNECT_TIMEOUT:.0f} 秒内无法完成 TCP/TLS 握手"
+            "（请检查网络/代理/VPN 能否访问 https://mcp.mcd.cn）",
+            408,
+        )
+    if "ConnectError" in err_text or "连接失败" in err_text:
+        return MCPError(tool, f"MCP 连接失败：{e}；请检查网络能否访问 https://mcp.mcd.cn")
+    if "PoolTimeout" in err_text:
+        return MCPError(tool, f"MCP 连接池超时：{POOL_TIMEOUT:.0f} 秒内未拿到可用连接（请稍后重试）", 408)
+    if "WriteTimeout" in err_text:
+        return MCPError(tool, "MCP 写入超时：请求发送未完成（网络上行被限速；请稍后重试）", 408)
+    if "RemoteProtocolError" in err_text or "Invalid JSON" in err_text or "not valid JSON" in err_text:
+        return MCPError(
+            tool,
+            f"MCP 响应协议错误：HTTP 层内容非法或被中间代理篡改（{e}）；"
+            "请检查代理/VPN 设置后重试",
         )
     if http_status is None:
         # event hook 没拿到状态码时，从消息文本里找 5xx（httpx/SDK 的异常文本通常带码）
@@ -197,9 +312,14 @@ class HttpMCPClient(MCPClient):
         self._stack = None
         self._http_client = None
         self._http_statuses: list[int] = []  # event hook 记录的 HTTP 状态码（还原 401/429）
+        self._http_retry_after: Optional[float] = None  # 最近一次响应头的 Retry-After（秒）
         self._read_cache: dict[str, tuple[float, object]] = {}  # 只读查询短 TTL 缓存
         self.cache_hits = 0
         self.cache_misses = 0
+        # 稳定性增强（2026-10-17）：trace 上下文 + 重试预算 + 连续失败计数
+        self.trace_id = uuid.uuid4().hex[:8]  # 实例级追踪 ID（审计/日志关联，不进用户提示）
+        self._session_retries = 0
+        self._consecutive_network_failures = 0
 
     # -- 连接管理 -----------------------------------------------------------
 
@@ -329,10 +449,25 @@ class HttpMCPClient(MCPClient):
                     self._http_statuses.append(int(response.status_code))
                     if len(self._http_statuses) > 20:
                         del self._http_statuses[:-20]
+                    # Retry-After（秒形态；HTTP-date 形态忽略，用内置退避）
+                    ra = response.headers.get("Retry-After") or response.headers.get("retry-after")
+                    if ra:
+                        try:
+                            self._http_retry_after = max(0.0, float(str(ra).strip()))
+                        except (TypeError, ValueError):
+                            self._http_retry_after = None
                 except Exception:
                     pass
 
-            self._http_client = httpx2.AsyncClient(headers=auth_headers, event_hooks={"response": [_record_status]})
+            # 显式连接/读取超时（2026-10-17 体检）：SDK 默认 read=5s 会提前误杀
+            # 慢但正常的 calculate-price（外层等待 45s）；httpx2 无 Timeout 时放弃显式配置
+            client_kwargs = {"headers": auth_headers, "event_hooks": {"response": [_record_status]}}
+            timeout_cls = getattr(httpx2, "Timeout", None)
+            if timeout_cls is not None:
+                client_kwargs["timeout"] = timeout_cls(
+                    connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=WRITE_TIMEOUT, pool=POOL_TIMEOUT
+                )
+            self._http_client = httpx2.AsyncClient(**client_kwargs)
             return {"http_client": self._http_client}
         # 签名未知：按旧版习惯传 headers，让 SDK 自己报错
         return {"headers": auth_headers}
@@ -362,46 +497,118 @@ class HttpMCPClient(MCPClient):
         except Exception as e:
             raise self._map_error(tool, e) from e
 
+    def _is_network_error(self, e: MCPError) -> bool:
+        """网络类错误（连接/超时/重置）：用于连续失败断路计数（429/业务错误不算）。"""
+        return any(k in str(e).lower() for k in _NETWORK_HINTS)
+
+    def _retry_after_seconds(self) -> Optional[float]:
+        """服务端 Retry-After（秒形态）→ 实际等待（封顶 RETRY_AFTER_CAP）；无则 None。"""
+        ra = self._http_retry_after
+        if ra is None or ra <= 0:
+            return None
+        return min(ra, RETRY_AFTER_CAP)
+
+    @staticmethod
+    def _jittered(base: float) -> float:
+        """退避抖动：50%-100% 区间（只减不增，避免叠加限流）。"""
+        low, high = JITTER_RANGE
+        return base * (low + random.random() * (high - low))
+
     def _retry_backoff(self, tool: str, e: MCPError, attempts: int) -> Optional[float]:
         """决定是否重试及退避秒数；None = 不重试（直接失败）。
 
-        策略：
-        - 401 认证错误：不重试（提示用户检查 Token）；
-        - 429 限流：最多 2 次尝试，退避 2s/4s（尊重限流、降速）；
-        - 5xx 服务端错误与瞬时网络错误：最多 3 次尝试，退避 0.5s/1s/2s；
-        - 业务错误（信封 success=false）与协议错误（isError）：不重试（确定性响应）。
+        策略（2026-10-17 稳定性增强）：
+        - 401/403 认证/权限错误：不重试（确定性，提示用户处理）；
+        - 副作用工具（NON_IDEMPOTENT_TOOLS）：不重试（防重复下单/支付）；
+        - 会话重试预算耗尽：不重试（防多失败请求的重试风暴）；
+        - 连续网络失败达到上限：不重试（断路，网络整体不可达时快速失败）；
+        - 429 限流：最多 2 次尝试；服务端给了 Retry-After 就按它等（封顶
+          RETRY_AFTER_CAP），否则 2s/4s；
+        - 5xx 与瞬时网络错误：最多 3 次尝试，退避 0.5s/1s/2s；
+        - 业务错误（信封 success=false）与协议错误（isError）：不重试（确定性响应）；
+        - 所有退避都乘随机抖动（50%-100%）。
         """
-        if e.code == 401:
+        if e.code in (401, 403):
+            return None
+        if tool in NON_IDEMPOTENT_TOOLS:
+            log_event("mcp_retry_skipped_side_effect", trace=getattr(self, "trace_id", ""), tool=tool)
+            return None
+        if self._session_retries >= MAX_SESSION_RETRIES:
+            log_event(
+                "mcp_retry_budget_exhausted", trace=getattr(self, "trace_id", ""),
+                tool=tool, session_retries=self._session_retries, cap=MAX_SESSION_RETRIES,
+            )
+            return None
+        if self._consecutive_network_failures >= MAX_CONSECUTIVE_NETWORK_FAILURES:
+            log_event(
+                "mcp_circuit_open", trace=getattr(self, "trace_id", ""), tool=tool,
+                consecutive_network_failures=self._consecutive_network_failures,
+            )
             return None
         if e.code == 429:
-            return BACKOFF_429[attempts - 1] if attempts < MAX_ATTEMPTS_429 else None
-        server_error = e.code is not None and e.code >= 500
-        network_error = any(k in str(e).lower() for k in _NETWORK_HINTS)
-        if (server_error or network_error) and attempts < MAX_ATTEMPTS_NETWORK:
-            return BACKOFF_NETWORK[attempts - 1]
-        return None
+            if attempts >= MAX_ATTEMPTS_429:
+                return None
+            base = self._retry_after_seconds()
+            if base is None:
+                base = BACKOFF_429[attempts - 1]
+        else:
+            server_error = e.code is not None and e.code >= 500
+            network_error = self._is_network_error(e)
+            if not (server_error or network_error):
+                return None  # 业务/协议类确定性错误
+            if attempts >= MAX_ATTEMPTS_NETWORK:
+                return None
+            base = BACKOFF_NETWORK[attempts - 1]
+        return self._jittered(base)
 
     def _invoke_with_retry(self, tool: str, arguments: dict, timeout: float):
-        """带有限退避重试的工具调用。返回 (result, attempts)。"""
+        """带有限退避重试的工具调用。返回 (result, attempts)。
+
+        重试决策全部走 _retry_backoff（预算/断路/Retry-After/抖动）；
+        每次尝试与每次放弃都写脱敏诊断日志（trace 关联）。
+        """
         attempts = 0
         while True:
             attempts += 1
+            t0 = time.perf_counter()
             try:
-                return (
-                    self._submit(
-                        self._session.call_tool(tool, arguments),
-                        tool=tool,
-                        timeout=timeout,
-                    ),
-                    attempts,
+                result = self._submit(
+                    self._session.call_tool(tool, arguments),
+                    tool=tool,
+                    timeout=timeout,
                 )
             except MCPError as e:
+                duration_ms = (time.perf_counter() - t0) * 1000
+                network_error = self._is_network_error(e)
+                if network_error:
+                    self._consecutive_network_failures += 1
+                log_event(
+                    "mcp_attempt_failed",
+                    trace=self.trace_id, tool=tool, attempt=attempts,
+                    duration_ms=round(duration_ms, 1), http_status=self._http_statuses[-1] if self._http_statuses else None,
+                    error_code=e.code, network_error=network_error, error=str(e),
+                )
                 backoff = self._retry_backoff(tool, e, attempts)
                 if backoff is None:
                     if attempts > 1:
                         e.args = (f"{e.args[0]}（已重试 {attempts - 1} 次均失败）",)
                     raise
+                self._session_retries += 1
+                log_event(
+                    "mcp_retry_scheduled",
+                    trace=self.trace_id, tool=tool, attempt=attempts,
+                    backoff_ms=round(backoff * 1000), retry_after_s=self._http_retry_after,
+                    session_retries=self._session_retries,
+                )
                 time.sleep(backoff)
+            else:
+                self._consecutive_network_failures = 0  # 成功即复位断路计数
+                log_event(
+                    "mcp_attempt_ok",
+                    trace=self.trace_id, tool=tool, attempt=attempts,
+                    duration_ms=round((time.perf_counter() - t0) * 1000, 1),
+                )
+                return result, attempts
 
     def _cache_key(self, tool: str, arguments: dict) -> str:
         return tool + "|" + json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
@@ -444,11 +651,31 @@ class HttpMCPClient(MCPClient):
         if protocol_error is not None:
             self._record(tool, arguments, False, note=f"isError（attempts={attempts}）",
                          duration_ms=duration_ms, purpose=purpose, attempts=attempts)
+            log_event("mcp_protocol_error", trace=self.trace_id, tool=tool, attempts=attempts,
+                      detail=protocol_error[:200])
             raise MCPError(
                 tool,
                 f"MCP 协议错误（isError）：{protocol_error or '服务端拒绝了该调用'}",
             )
-        data = check_envelope(tool, parse_tool_text(result))
+        parsed = parse_tool_text(result)
+        # 4) 无信封响应（2026-10-17 体检）：除白名单工具的空态外，纯文本响应 =
+        #    网关错误页/服务异常。明确失败，不静默降级成空菜单/空门店。
+        #    注意：信封内 data 为字符串是合法的（list-nutrition-foods 的自定义文本），
+        #    所以判的是「有没有信封」而不是「data 是不是字符串」。
+        if isinstance(parsed, str) and tool not in PLAIN_TEXT_TOOLS:
+            snippet = parsed.strip().replace("\n", " ")[:80]
+            self._record(tool, arguments, False, note="无 JSON 信封", duration_ms=duration_ms,
+                         purpose=purpose, attempts=attempts)
+            log_event("mcp_no_envelope", trace=self.trace_id, tool=tool, attempts=attempts,
+                      snippet=snippet)
+            raise MCPError(
+                tool,
+                "MCP 响应解析失败：官方返回不是预期的 API 信封 JSON"
+                "（可能是网关/代理错误页或服务异常；返回开头："
+                + snippet
+                + "）",
+            )
+        data = check_envelope(tool, parsed)
         # 只缓存成功结果——失败绝不进缓存（不会把失败当成功复用）
         if ttl:
             self._read_cache[key] = (time.monotonic(), data)
@@ -500,12 +727,20 @@ class HttpMCPClient(MCPClient):
         return adapt_stores(self._call("query-nearby-stores", args))
 
     def delivery_addresses(self) -> list[dict]:
+        """delivery-query-addresses -> 已保存地址列表。
+
+        2026-10-17 契约审计：官方未公布该工具的返回容器结构（Schema 无参数、
+        真实账户无地址，仅验证过「空态」），因此用 _as_list 兼容多种容器
+        （list / {"list"|"items"|"data"|"records"|"result"|"addresses": [...]} /
+        dict 单体），并丢弃没有 addressId 的条目（没有 ID 的地址无法用于
+        delivery-query-stores，留着只会把「无可用地址」误导成「查询失败」）——
+        取不到即空列表，由上层明示「没有可用地址」，绝不猜测地址。
+        """
         raw = self._call("delivery-query-addresses", {})
-        if isinstance(raw, dict):
-            addresses = raw.get("addresses") or raw.get("list") or []
-        else:
-            addresses = raw if isinstance(raw, list) else []
-        return [a for a in addresses if isinstance(a, dict)]
+        addresses = _as_list(raw)
+        return [
+            a for a in addresses if isinstance(a, dict) and _first(a, "addressId", "address_id", "addressID", "id")
+        ]
 
     def delivery_stores(self, address_id: str, be_type: int = 2):
         return adapt_stores(

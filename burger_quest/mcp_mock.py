@@ -214,11 +214,18 @@ class MockMCPClient(MCPClient):
             )
         discount = 0
         all_coupons = self._all_coupons(scene.store_code)
-        for coupon in coupon_ids:
-            cid, ccode = resolve_coupon_pair(coupon)
-            # 忠实还原官方行为（2026-10-16 实测 code=600010）：只传 couponId 不传
-            # couponCode 会被整单拒绝——演示数据也必须遵守双字段契约
-            if cid and not ccode:
+        # 从 payload 实际提交的券推导折扣（2026-10-17 契约审计修改）：
+        # 旧实现按调用方传入的 coupon_ids 全量算折扣——若上层挂在商品上的券
+        # 少于传入列表（如被容量约束裁掉），演示就会比真实链路「更宽松」。
+        # 现在与官方语义对齐：只认 payload 里真实携带 couponId 的商品，
+        # 且只认齐备 couponCode 的券（还原官方 600010 契约）。
+        submitted: list[tuple[str, str]] = []
+        for entry in payload["items"]:
+            cid = entry.get("couponId")
+            if cid:
+                submitted.append((str(cid), str(entry.get("couponCode") or "")))
+        for cid, ccode in submitted:
+            if not ccode:
                 return adapt_price(
                     {"success": False, "code": 600010, "message": "使用优惠券需要couponId和couponCode"}
                 )

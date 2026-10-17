@@ -202,23 +202,37 @@ def test_coupon_submitted_but_no_effect_is_not_counted():
 
 
 def test_stacking_not_assumed_when_authority_ignores_second_coupon():
-    """提交双券但权威只认一张：按权威折扣计价并备注，不默认叠加。"""
-    menu = [item("B1", "麦辣鸡腿堡", 2100, category="鸡肉汉堡", tags=("辣",))]
+    """提交双券但权威只认一张：按权威折扣计价并备注，不默认叠加。
+
+    2026-10-17 契约审计重写：官方 calculate-price Schema 把 couponId/couponCode
+    定义在商品级（items[]）——双券必须挂在两件不同商品上。旧版用 1 件商品
+    「提交 2 张券」（实际第二张从未进 payload），叙事与行为不符；现按官方契约
+    用 2 件商品真实携带双券，权威只认一张时仍然只按权威折扣计价。
+    """
+    menu = [
+        item("B1", "麦辣鸡腿堡", 2100, category="鸡肉汉堡", tags=("辣",)),
+        item("S1", "薯条（大）", 1250, category="小食"),
+    ]
     c1 = coupon("C1", "满20减2", threshold=2000, value=200)
     c2 = coupon("C2", "满20减3", threshold=2000, value=300)
     price = ScriptedPrice(
         quotes={
-            # 双券提交 -> 权威只减 200（第二张未生效）
-            (("B1",), ("C1|CODE-C1", "C2|CODE-C2")): PriceQuote(total_cents=1900, original_cents=2100, discount_cents=200, ok=True),
+            # 双券提交（两件商品各带一张）-> 权威只减 200（第二张未生效）
+            (("B1", "S1"), ("C1|CODE-C1", "C2|CODE-C2")): PriceQuote(
+                total_cents=3150, original_cents=3350, discount_cents=200, ok=True
+            ),
         }
     )
     c = nlparser.parse("预算50，想吃辣")
     options, _ = build_plan(c, menu, [c1, c2], [], price)
     assert options
     best = options[0]
-    assert best.total_cents == 1900
+    assert best.total_cents == 3150
     assert best.discount_cents == 200  # 只确认了 200，不是 500
     assert best.coupon_note and "不默认优惠可叠加" in best.coupon_note
+    # 双券确实挂在两件商品上提交（官方 per-item 契约）
+    assert [pi.item.code for pi in best.items] == ["B1", "S1"]
+    assert {cp.id for cp in best.coupons} == {"C1", "C2"}
 
 
 # ---------------------------------------------------------------------------
