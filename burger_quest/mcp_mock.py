@@ -19,6 +19,7 @@ from .mcp_base import (
     OrderScene,
     TOOLS_USED,
     adapt_coupons,
+    resolve_coupon_pair,
     adapt_meal_detail,
     adapt_meals,
     adapt_nutrition,
@@ -213,7 +214,14 @@ class MockMCPClient(MCPClient):
             )
         discount = 0
         all_coupons = self._all_coupons(scene.store_code)
-        for cid in coupon_ids:
+        for coupon in coupon_ids:
+            cid, ccode = resolve_coupon_pair(coupon)
+            # 忠实还原官方行为（2026-10-16 实测 code=600010）：只传 couponId 不传
+            # couponCode 会被整单拒绝——演示数据也必须遵守双字段契约
+            if cid and not ccode:
+                return adapt_price(
+                    {"success": False, "code": 600010, "message": "使用优惠券需要couponId和couponCode"}
+                )
             c = all_coupons.get(cid)
             if not c:
                 return adapt_price({"success": False, "code": 400, "message": f"优惠券 {cid} 不存在"})

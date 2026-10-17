@@ -429,9 +429,10 @@ def run_quest(
     # 8. 权威价格计算函数（失败只计数，最后汇总为一条提示，避免刷屏）
     price_failures: list[str] = []
 
-    def price_fn(items, coupon_ids) -> PriceQuote:
+    def price_fn(items, coupons) -> PriceQuote:
+        # coupons：Coupon 对象列表（含 couponCode）或纯 id 字符串（兼容旧路径）
         try:
-            return client.calculate_price(scene, items, coupon_ids, purpose="plan_verification")
+            return client.calculate_price(scene, items, coupons, purpose="plan_verification")
         except MCPError as e:
             price_failures.append(str(e))
             return PriceQuote(ok=False, message=str(e))

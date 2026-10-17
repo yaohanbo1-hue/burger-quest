@@ -77,7 +77,7 @@ description: 麦门异世界 Burger Quest —— 基于麦当劳中国官方 MCP
 5. **优惠券（尽力而为，失败不阻塞）**：`query-store-coupons(storeCode, orderType, beType)` + `query-my-coupons()`。失败 → 按无券方案计算并说明。
    - **不得**调用 `available-coupons` / `auto-bind-coupons`（领券会改变用户账户状态）。
 6. **营养（尽力而为）**：`list-nutrition-foods`（无参数；返回自定义文本 `[N]{productName,...,energyKcal,...}:` + CSV 行，按表头解析）。失败 → 不展示营养信息。
-7. **组合验价**：每个候选组合走 **`calculate-price`**（`items[].productCode/quantity`，券用 `items[].couponId` 挂在商品上）得到权威应付总价。
+7. **组合验价**：每个候选组合走 **`calculate-price`**（`items[].productCode/quantity`；用券时券挂在商品上，且 `items[].couponId` 与 `items[].couponCode` **必须成对提交**，只传 ID 官方会返回 600010）得到权威应付总价。
    - 券试探顺序：预期折扣最优的**单券** → 最优**双券**（是否真可叠加由权威核验决定，**不默认可叠加**）→ 全部被拒才回退无券；
    - 失败 → 该组合作废；**绝不用单价加总冒充权威总价**。
 

@@ -472,11 +472,16 @@ def adapt_coupons(raw: Any, source: str) -> list[Coupon]:
             value_cents = yuan_to_cents(val)
         if thr not in (None, ""):
             threshold_cents = yuan_to_cents(thr)
+        # couponCode：官方算价要求与 couponId 同时提交（联调实测 600010）。
+        # 券列表响应中的字段名未经真实有券账户验证（联调账户无券），按官方算价
+        # Schema 的命名惯例取候选；为空时只传 couponId（官方会拒绝，引擎诚实回退无券）。
+        code = _first(r, "couponCode", "coupon_code", default="")
         applicable = _first(r, "applicableMeals", "mealCodes", "applicableCodes", "productCodes", default=[])
         out.append(
             Coupon(
                 id=str(cid),
                 name=str(name),
+                code=str(code or ""),
                 source=source,
                 kind=kind if percent is not None else "threshold",
                 value_cents=value_cents,
@@ -637,16 +642,43 @@ def extract_product_names(quote: PriceQuote) -> dict:
     return out
 
 
-def build_calc_payload(scene: OrderScene, items: list, coupon_ids: list) -> dict:
-    """构造 calculate-price 入参（联调实测 Schema）。
+def resolve_coupon_pair(coupon) -> tuple[str, str]:
+    """把任意券形态解析为 (couponId, couponCode)。
 
-    items: list[PlanItem]；coupon_ids 挂在第一件商品上（官方 Schema 为 items[].couponId）。
+    兼容：Coupon 对象 / (id, code) 元组 / 纯 id 字符串。
+    官方 calculate-price 要求两者同时提交（真实联调实测 600010）。
     """
+    if coupon is None:
+        return "", ""
+    if isinstance(coupon, str):
+        return coupon, ""
+    if isinstance(coupon, (tuple, list)) and len(coupon) >= 1:
+        cid = str(coupon[0] or "")
+        code = str(coupon[1] or "") if len(coupon) > 1 else ""
+        return cid, code
+    return str(getattr(coupon, "id", "") or ""), str(getattr(coupon, "code", "") or "")
+
+
+def build_calc_payload(scene: OrderScene, items: list, coupons: list) -> dict:
+    """构造 calculate-price 入参（联调实测 Schema，2026-10-16 补 couponCode）。
+
+    items: list[PlanItem]；coupons 挂在第一件商品上。
+    官方 Schema：items[].couponId **与** items[].couponCode 必须同时提交
+    （真实联调实测：只传 couponId → 业务错误 600010「使用优惠券需要couponId和couponCode」）。
+
+    coupons 兼容三种形态（按优先级）：
+    - Coupon 对象：取 .id 与 .code（code 为空则只传 couponId）；
+    - (id, code) 元组；
+    - 纯字符串（仅 id，旧调用路径/mock）。
+    """
+    coupon_id, coupon_code = resolve_coupon_pair(coupons[0] if coupons else None)
     payload_items = []
     for i, pi in enumerate(items):
         entry = {"productCode": pi.item.code, "quantity": pi.qty}
-        if coupon_ids and i == 0:
-            entry["couponId"] = coupon_ids[0]
+        if coupon_id and i == 0:
+            entry["couponId"] = coupon_id
+            if coupon_code:
+                entry["couponCode"] = coupon_code
         payload_items.append(entry)
     payload = {
         "storeCode": scene.store_code,

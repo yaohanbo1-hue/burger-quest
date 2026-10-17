@@ -20,7 +20,7 @@ import copy
 import pytest
 
 from burger_quest import nlparser, rpg
-from burger_quest.mcp_base import scene_for_mode
+from burger_quest.mcp_base import resolve_coupon_pair, scene_for_mode
 from burger_quest.mcp_mock import MockMCPClient
 from burger_quest.models import Coupon, MenuItem, PriceQuote
 from burger_quest.planner import MAX_OPTIONS, build_plan
@@ -36,9 +36,14 @@ def item(code, name, price_cents, category="", tags=()):
 
 
 class ScriptedPrice:
-    """按 (餐品编码元组, 券ID元组) 脚本返回权威报价；未脚本化返回 default。
+    """按 (餐品编码元组, 券标识元组) 脚本返回权威报价；未脚本化返回 default。
 
-    券 ID 顺序不敏感（提交顺序不影响语义）。
+    券标识顺序不敏感（提交顺序不影响语义）。
+
+    2026-10-16：planner 现在向 price_fn 传 Coupon 对象（官方 calculate-price
+    要求 couponId 与 couponCode 同时提交，只传 ID 会报 600010）。这里用与生产
+    同一套 resolve_coupon_pair 规范化键，因此同时接受 Coupon 对象与裸券 ID，
+    测试仍可按 (couponId, couponCode) 精确脚本化权威返回。
     """
 
     def __init__(self, quotes=None, default_ok=True, default_total=None):
@@ -47,8 +52,13 @@ class ScriptedPrice:
         self.default_total = default_total
         self.calls = []
 
-    def __call__(self, items, coupon_ids):
-        key = (tuple(pi.item.code for pi in items), tuple(sorted(coupon_ids)))
+    @staticmethod
+    def _coupon_key(coupons):
+        pairs = sorted(resolve_coupon_pair(c) for c in (coupons or []))
+        return tuple(f"{cid}|{ccode}" for cid, ccode in pairs)
+
+    def __call__(self, items, coupons):
+        key = (tuple(pi.item.code for pi in items), self._coupon_key(coupons))
         self.calls.append(key)
         if key in self.quotes:
             return self.quotes[key]
@@ -82,10 +92,12 @@ def nutrition_list(*names):
     return [table[n] for n in names if n in table]
 
 
-def coupon(cid, name="测试券", source="store", threshold=0, value=0, percent=None, codes=()):
+def coupon(cid, name="测试券", source="store", threshold=0, value=0, percent=None, codes=(), code=None):
+    """构造测试券。code 默认由 cid 派生，模拟官方 couponId/couponCode 成对下发。"""
     return Coupon(
         id=cid,
         name=name,
+        code=code if code is not None else f"CODE-{cid}",
         source=source,
         kind="percent" if percent else "threshold",
         value_cents=value,
@@ -176,7 +188,7 @@ def test_coupon_submitted_but_no_effect_is_not_counted():
     # 脚本：提交该券时权威返回「无折扣」（模拟券实际不可用/已过期）
     price = ScriptedPrice(
         quotes={
-            (("B1",), ("C-20",)): PriceQuote(total_cents=2100, original_cents=2100, discount_cents=0, ok=True),
+            (("B1",), ("C-20|CODE-C-20",)): PriceQuote(total_cents=2100, original_cents=2100, discount_cents=0, ok=True),
         }
     )
     c = nlparser.parse("预算50，想吃辣")
@@ -197,7 +209,7 @@ def test_stacking_not_assumed_when_authority_ignores_second_coupon():
     price = ScriptedPrice(
         quotes={
             # 双券提交 -> 权威只减 200（第二张未生效）
-            (("B1",), ("C1", "C2")): PriceQuote(total_cents=1900, original_cents=2100, discount_cents=200, ok=True),
+            (("B1",), ("C1|CODE-C1", "C2|CODE-C2")): PriceQuote(total_cents=1900, original_cents=2100, discount_cents=200, ok=True),
         }
     )
     c = nlparser.parse("预算50，想吃辣")

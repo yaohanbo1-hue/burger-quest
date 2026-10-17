@@ -527,7 +527,8 @@ def build_plan(
         best_for_combo: Optional[PlanOption] = None
         any_verified = False
         for cset in coupon_sets(combo, coupons, estimated):
-            quote = price_fn(combo, [c2.id for c2 in cset])
+            # 传 Coupon 对象（含 couponCode）——官方算价要求 id+code 同时提交
+            quote = price_fn(combo, cset)
             if not quote.ok or quote.total_cents is None:
                 price_failed += 1
                 continue  # 权威计算失败：该券组合作废，不编造总价

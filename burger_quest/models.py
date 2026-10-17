@@ -88,6 +88,9 @@ class MenuItem:
 class Coupon:
     id: str
     name: str
+    # couponCode：官方 calculate-price 要求 couponId 与 couponCode 同时提交
+    # （2026-10-16 真实联调实测：只传 couponId 报业务错误 600010）
+    code: str = ""
     source: str = "store"  # store=门店可用券 | my=我的卡包 | available=麦麦省可领
     kind: str = "threshold"  # threshold=满减 | percent=折扣 | item=指定商品
     value_cents: Optional[int] = None  # 满减：减免金额（分）；折扣：忽略

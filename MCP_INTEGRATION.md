@@ -119,7 +119,7 @@
 | `query-meal-detail` | `storeCode`、`orderType`、`beType`、`code`（餐品编码） | `beCode` |
 | `query-store-coupons` | `orderType`、`beType`、`storeCode` | `beCode` |
 | `query-my-coupons` | 无 | `page`、`pageSize` |
-| `calculate-price` | `storeCode`、`orderType`、`beType`、`items[]`（`productCode`+`quantity`） | `items[].couponId`（券挂商品上）、`beCode` |
+| `calculate-price` | `storeCode`、`orderType`、`beType`、`items[]`（`productCode`+`quantity`） | `items[].couponId` **+ `items[].couponCode`**（券挂商品上、两字段必须成对提交，见 3.9）、`beCode` |
 | `list-nutrition-foods` / `now-time-info` | 无 | — |
 | `delivery-query-addresses` | 无 | — |
 | `delivery-query-stores` | `beType`(2麦乐送/6团餐)、`addressId` | — |
@@ -144,7 +144,7 @@
 
 ## 3.6 仍未验证项（需要特定账户状态）
 
-1. **优惠券字段与金额单位**：联调账户当时无可用券（`query-store-coupons` 返回空、`query-my-coupons` 无券）；`items[].couponId` 挂载方式与门槛/折扣字段按官方 Schema 与惯例实现（金额按「元」解析），有待有券账户验证；
+1. **优惠券的门槛/折扣金额单位与真实优惠实效**：联调账户无可用券（`query-store-coupons` 返回空、`query-my-coupons` 为「暂无可用优惠券」）。已验证的是**提交契约**——官方要求 `couponId` + `couponCode` 成对提交，只传 ID 报 600010（见 §3.9）；**未验证**的是券的门槛/折扣字段单位（当前按「元」解析）与「有券时优惠是否真实生效」。需要一张有效门店券或有券账户才能结案；
 2. **外送全链路**：需要账户已保存配送地址（联调账户无地址，已实测「无地址」分支的明确说明）；
 3. **套餐换选 / 特制选项**（`rounds` 换项、`modification` 特制键）：MVP 不展示，接口已预留。
 
@@ -244,6 +244,33 @@ python -m burger_quest smoke --store-code 1420762 --json result.json
 
 复测方式：`python tools/measure_calls.py`（演示）或
 `MCD_MCP_TOKEN=xxx python tools/measure_calls.py --real --store-code 1420762`（真实）。
+
+## 3.9 优惠券双字段契约（2026-10-16 真实联调发现）
+
+真实只读联调中，官方 `calculate-price` 对只提交 `couponId` 的算价请求返回：
+
+```
+code=600010  使用优惠券需要couponId和couponCode
+```
+
+即 **官方要求 `items[].couponId` 与 `items[].couponCode` 同时提交**，缺一即整单拒绝（业务失败，不是静默忽略）。
+只传 ID 的实现会让**有券账户的优惠永远不生效**。
+
+当前实现：
+
+| 层 | 处理 |
+| --- | --- |
+| `models.Coupon` | 新增 `code` 字段承载 `couponCode` |
+| `adapt_coupons` | 从券响应解析 `couponCode` / `coupon_code`；**取不到就留空，绝不伪造** |
+| `resolve_coupon_pair` | 统一 `Coupon` 对象 / `(id, code)` 元组 / 裸 id 三种形态 |
+| `build_calc_payload` | 两字段齐备才写 `couponCode`；券只挂第一件商品 |
+| `mcp_mock` | 忠实还原官方 600010——只传 ID 必须失败，**演示数据不比真实服务端宽松** |
+| `demo_data.json` | 3 张演示券全部补 `couponCode` |
+| 回归测试 | `tests/test_coupon_contract.py`（20 条协议契约测试） |
+
+诚实性边界：**本组修复只验证「协议字段被正确提交」，未验证「优惠在真实账户上实际生效」**——
+联调账户无可用券（`query-store-coupons` 空、`query-my-coupons` 返回「暂无可用优惠券」），
+因此券的门槛/折扣金额单位（当前按「元」解析）仍属未验证项，见 §3.6 第 1 条。
 
 ## 4. 业务价值
 

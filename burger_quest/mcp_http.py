@@ -559,7 +559,8 @@ class HttpMCPClient(MCPClient):
     def list_nutrition_foods(self):
         return adapt_nutrition(self._call("list-nutrition-foods", {}))
 
-    def calculate_price(self, scene: OrderScene, items: list, coupon_ids: list, purpose: str = ""):
+    def calculate_price(self, scene: OrderScene, items: list, coupons: list, purpose: str = ""):
         # 算价绝不走缓存：必须按当前方案实时核验（req: 最终总价的真实性）
-        payload = build_calc_payload(scene, items, coupon_ids)
+        # coupons: Coupon 对象列表 / (id, code) 元组 / 纯 id 字符串（兼容）
+        payload = build_calc_payload(scene, items, coupons)
         return adapt_price(self._call("calculate-price", payload, purpose=purpose or "price_check"))
