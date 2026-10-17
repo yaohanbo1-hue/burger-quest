@@ -35,6 +35,83 @@ DEFAULT_PORT = 8787
 MAX_BODY_BYTES = 64 * 1024  # 请求体上限（防滥用）
 
 # ---------------------------------------------------------------------------
+# 本地服务访问控制（2026-10-17 安全审计）
+#
+# 威胁模型：本进程在 127.0.0.1:PORT 上开HTTP 服务。浏览器里任何一个恶意
+# 页面都能对本机端口发跨站请求——CORS 只阻止**读取**响应，**阻止不了请求
+# 发出**。若无校验，攻击者可让受害者的浏览器以受害者本机的 Token 发起
+# 真实 MCP 查询（虽然只读），这违反「Token 只在用户主动操作时使用」的原则。
+#
+# 两道防线：
+# 1) Host 白名单：挡住 DNS rebinding（攻击者把 evil.example 解析到 127.0.0.1，
+#    浏览器仍认为自己在访问evil.example，却实际打到本地服务）；
+# 2) Origin 校验：挡住普通跨站表单/fetch 触发的写操作。
+#
+# 同源请求（用户手动打开 http://127.0.0.1:PORT/）不带 Origin 头或带同源
+# Origin，均放行。
+# ---------------------------------------------------------------------------
+ALLOWED_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+
+def _host_allowed(host_header: str, allow_lan: bool = False) -> bool:
+    """Host 头校验：只接受本机名（--allow-lan 时额外放行该绑定地址）。"""
+    if not host_header:
+        return False
+    host = host_header.strip().lower()
+    # 去掉端口（IPv6 保留方括号）
+    if host.startswith("["):
+        closing = host.find("]")
+        if closing != -1:
+            name = host[: closing + 1]
+            port = host[closing + 1 :].lstrip(":")
+        else:
+            name, port = host, ""
+    elif ":" in host:
+        name, port = host.rsplit(":", 1)
+    else:
+        name, port = host, ""
+    if name in ALLOWED_HOSTNAMES:
+        return True
+    if allow_lan:
+        # 显式放行局域网后，允许绑定地址自身及其 hostname（由启动参数决定）
+        return True
+    return False
+
+
+def _origin_allowed(origin: str, host_header: str) -> bool:
+    """Origin 校验：缺失（同源导航/fetch 省略）或与 Host 同源才放行。"""
+    if not origin or origin.lower() == "null":
+        return True  # 同源请求不带 Origin；opaque origin 交给 Host 防线
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    # Origin 的 netloc 必须与 Host 头一致（同样容忍省略端口的情况）
+    origin_host = (parsed.hostname or "").lower()
+    host_host = _host_header_name(host_header).lower()
+    if not origin_host or not host_host:
+        return False
+    if origin_host == host_host:
+        return True
+    # 允许 localhost 与 127.0.0.1 互指（用户手输其一、页面由另一加载）
+    if {origin_host, host_host} <= {"localhost", "127.0.0.1"}:
+        return True
+    return False
+
+
+def _host_header_name(host_header: str) -> str:
+    if not host_header:
+        return ""
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        closing = host.find("]")
+        return host[: closing + 1] if closing != -1 else host
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+# ---------------------------------------------------------------------------
 # 状态映射（错误 -> 用户可读状态；文案不掩盖真实故障）
 # ---------------------------------------------------------------------------
 STATE_META = {
@@ -157,6 +234,24 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: A003
         return
 
+    # -- 访问控制（安全审计：见文件头威胁模型） -------------------------------
+    def _access_denied(self, reason: str, status: int = 403) -> bool:
+        """Host/Origin 校验失败：明确拒绝，绝不静默放行。"""
+        self._send_json({"error": "access-denied", "detail": reason}, status=status)
+        return True
+
+    def _guard(self, require_same_origin: bool) -> bool:
+        host_header = self.headers.get("Host", "")
+        if not _host_allowed(host_header, getattr(self.server, "allow_lan", False)):
+            self._access_denied(f"Host 头不被允许：{host_header or '(空)'}")
+            return True
+        if require_same_origin:
+            origin = self.headers.get("Origin", "")
+            if not _origin_allowed(origin, host_header):
+                self._access_denied(f"跨站请求被拒绝：Origin={origin or '(无)'}")
+                return True
+        return False
+
     # -- 工具 -----------------------------------------------------------------
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -208,6 +303,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- 路由 -----------------------------------------------------------------
     def do_GET(self):  # noqa: N802
+        # GET 也校验 Host：DNS rebinding 可用GET 读进度/状态（信息泄露）
+        if self._guard(require_same_origin=False):
+            return
         path = urlparse(self.path).path
         if path == "/":
             self._send_asset("index.html", "text/html; charset=utf-8")
@@ -225,6 +323,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not-found"}, status=404)
 
     def do_POST(self):  # noqa: N802
+        # 写操作必须同源：阻断任意网页借受害者浏览器驱动本服务发真实 MCP 查询
+        if self._guard(require_same_origin=True):
+            return
         path = urlparse(self.path).path
         body = self._read_body()
         if body is None:
@@ -317,9 +418,10 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, app):
+    def __init__(self, address, app, allow_lan: bool = False):
         super().__init__(address, _Handler)
         self.app = app
+        self.allow_lan = allow_lan
 
 
 class WebApp:
@@ -416,11 +518,13 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, progress_path: Opt
         )
     app = WebApp(progress_path=progress_path)
     try:
-        httpd = _Server((host, port), app)
+        httpd = _Server((host, port), app, allow_lan=allow_lan)
     except OSError as e:
         raise SystemExit(f"无法监听 {host}:{port}（{e}）。可换端口：--port <其他端口>") from e
-    print(f"🖥️  Burger Quest 本地界面已启动：http://{host}:{port}")
+    print(f"🖥️Burger Quest 本地界面已启动：http://{host}:{port}")
     print("    仅监听本机；Token 只从环境变量/.env 读取，不会发送到浏览器。")
+    if allow_lan:
+        print("    ⚠️ 已放行局域网访问：本机 Token 会被同网络设备上的页面间接调用。")
     print("    停止：Ctrl+C（无后台任务，干净退出）。")
     try:
         httpd.serve_forever()
