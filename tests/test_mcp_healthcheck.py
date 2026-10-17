@@ -417,4 +417,3 @@ def test_budget_diagnosis_distinguishes_prescreened_from_verified():
     assert not options2
     mixed = [w for w in warnings2 if "因估算价超出预算被跳过" in w]
     assert mixed and "进入权威核验但均失败" in mixed[0]
-
