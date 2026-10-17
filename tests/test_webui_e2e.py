@@ -317,3 +317,225 @@ def test_e5_unknown_post_path_404(srv):
     status, _, body = _req(srv, "/api/unknown", method="POST", data={"x": 1})
     assert status == 404
     assert json.loads(body)["error"] == "not-found"
+
+
+# ===========================================================================
+# E6. 此前未覆盖区域清偿（技术债：webui.py 65% → 80%+）
+#    /api/status、/api/progress 两个路由此前零请求；_host_header_name 的
+#    IPv6/畸形分支、error_state/result_state 的映射分支无测试。
+# ===========================================================================
+
+
+def test_e6_status_endpoint_reaches_app_and_no_token_leak(srv):
+    status, headers, body = _req(srv, "/api/status")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["overall"] == "ok"
+    assert srv.stub_app.status_calls == 1, "状态端点没调到 app"
+    text = body.decode("utf-8")
+    assert "Bearer" not in text and "MCD_MCP_TOKEN" not in text, "状态载荷疑似泄 Token"
+
+
+def test_e6_progress_endpoint_reaches_app(srv):
+    status, _, body = _req(srv, "/api/progress")
+    assert status == 200
+    assert json.loads(body)["achievements"] == []
+    assert srv.stub_app.progress_calls == 1, "进度端点没调到 app"
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("", ""),
+        ("127.0.0.1", "127.0.0.1"),
+        ("127.0.0.1:8080", "127.0.0.1"),
+        ("localhost:8787", "localhost"),
+        ("[::1]:8080", "[::1]"),
+        ("[::1]", "[::1]"),
+        ("[bad", "[bad"),  # 括号不闭合：原样返回，不炸
+    ],
+)
+def test_e6_host_header_name(host, expected):
+    assert webui._host_header_name(host) == expected
+
+
+def test_e6_error_state_mapping():
+    assert webui.error_state(MCPError("m", "触发 600 次/分钟限流", code=429)) == "rate_limited"
+    assert webui.error_state(MCPError("m", "429 Too Many Requests")) == "rate_limited"
+    assert webui.error_state(MCPError("m", "Token 无效", code=401)) == "permission"
+    assert webui.error_state(MCPError("m", "403 拒绝")) == "permission"
+    assert webui.error_state(MCPError("m", "服务端爆炸", code=500)) == "connection"
+    assert webui.error_state(ValueError("非 MCP 异常也归为连接类")) == "connection"
+
+
+class _FakeChosen:
+    nutrition_missing = False
+
+
+class _FakeResult:
+    def __init__(self, chosen, warnings=()):
+        self.chosen = chosen
+        self.warnings = list(warnings)
+
+
+def test_e6_result_state_branches():
+    assert webui.result_state(_FakeResult(None)) == "no_result"
+    assert webui.result_state(_FakeResult(_FakeChosen(), ["未返回真实价格"])) == "partial"
+    assert webui.result_state(_FakeResult(_FakeChosen(), ["门店查询失败"])) == "partial"
+
+    class _NoNutrition:
+        nutrition_missing = True
+
+    assert webui.result_state(_FakeResult(_NoNutrition())) == "partial"
+    assert webui.result_state(_FakeResult(_FakeChosen())) == "success"
+
+
+class _FakeDoctorReport:
+    def __init__(self, steps, passed):
+        self.steps = steps
+        self.passed = passed
+
+
+def test_e6_webapp_status_token_missing_is_config(monkeypatch):
+    """Token 缺失 → overall=config（配置问题）而非 failed，且绝不回吐 Token 值。"""
+    from burger_quest import doctor as doctor_mod
+    from burger_quest.webui import WebApp
+
+    report = _FakeDoctorReport(
+        steps=[
+            {"level": "L1", "step": "服务可访问", "ok": True, "detail": "200 OK"},
+            {"level": "L2", "step": "Token 配置", "ok": False, "detail": "缺少 MCD_MCP_TOKEN"},
+        ],
+        passed=False,
+    )
+    monkeypatch.setattr(doctor_mod, "run_doctor", lambda: report)
+    st = WebApp().status()
+    levels = {lv["level"]: lv for lv in st["levels"]}
+    assert levels["L1"]["ok"] is True
+    assert levels["L2"]["ok"] is False
+    assert levels["L3"]["ok"] is None  # 前置未过：未执行
+    assert levels["L5"]["ok"] is None and "实时验证" in levels["L5"]["detail"]
+    assert st["overall"] == "config"
+    assert st["token_present"] is False
+
+
+def test_e6_webapp_status_all_green(monkeypatch):
+    from burger_quest import doctor as doctor_mod
+    from burger_quest.webui import WebApp
+
+    report = _FakeDoctorReport(
+        steps=[
+            {"level": "L1", "step": "服务可访问", "ok": True, "detail": "200"},
+            {"level": "L2", "step": "Token 配置", "ok": True, "detail": "已配置"},
+            {"level": "L3", "step": "工具发现", "ok": True, "detail": "7 个工具"},
+            {"level": "L4", "step": "单工具调用", "ok": True, "detail": "calculate-price 正常"},
+        ],
+        passed=True,
+    )
+    monkeypatch.setattr(doctor_mod, "run_doctor", lambda: report)
+    st = WebApp().status()
+    assert st["overall"] == "ok"
+    assert st["token_present"] is True
+    assert all(lv["ok"] for lv in st["levels"] if lv["level"] != "L5")
+
+
+# ===========================================================================
+# E7. serialize_result（/api/quest 响应序列化器）：真实管线 + 无 Token 泄漏
+# ===========================================================================
+
+
+def test_e7_serialize_result_json_safe_and_no_token_leak():
+    """前端对响应做 JSON.stringify：任何非 JSON 类型都会让界面白屏；
+    序列化器同时是「Token 不下发」承诺的执行点，逐字段钉死。"""
+    from burger_quest.mcp_mock import MockMCPClient
+    from burger_quest.service import run_quest
+
+    result = run_quest("我想吃辣，预算35，外送到南山科技园，一个人", MockMCPClient())
+    payload = webui.serialize_result(result)
+    text = json.dumps(payload, ensure_ascii=False)  # 不可序列化会在这里炸
+    assert "Bearer" not in text and "MCD_MCP_TOKEN" not in text, "响应疑似夹带 Token"
+    assert payload["state"] in {"success", "partial", "no_result"}
+    assert payload["options"], "演示流程应产出候选方案"
+    assert payload["chosen_index"] is not None, "推荐项未标记"
+    opt = payload["options"][payload["chosen_index"]]
+    assert opt["total"].startswith("¥"), f"总价未按人民币格式：{opt['total']}"
+    assert opt["items"] and opt["items"][0]["name"], "方案缺少餐品行"
+    if payload["store"] is not None:
+        assert {"code", "name", "address"} <= set(payload["store"])
+    assert isinstance(payload["store_candidates"], list)
+    # 游戏进度必须带虚拟声明（合规红线：虚拟进度不得伪装真实成就）
+    assert any("虚拟" in ln for ln in payload["progress_lines"])
+
+
+def test_e7_calls_summary_counts_real_calls_only():
+    calls = [
+        {"mcp_call": True, "tool": "query-meals", "ok": True},
+        {"mcp_call": True, "tool": "query-meals", "ok": False},
+        {"mcp_call": False, "tool": "mock-internal", "ok": True},  # 非真实调用不计入
+        {"tool": "calculate-price", "ok": True},  # 缺 mcp_call 键视为真实调用
+    ]
+    s = webui._calls_summary(calls)
+    assert s["total"] == 3
+    assert s["failed"] == 1
+    assert s["by_tool"] == {"query-meals": 2, "calculate-price": 1}
+
+
+# ===========================================================================
+# E8. WebApp 业务方法（本地进度落盘/失败）+ serve 的绑定安全守卫
+# ===========================================================================
+
+
+def _demo_result():
+    from burger_quest.mcp_mock import MockMCPClient
+    from burger_quest.service import run_quest
+
+    return run_quest("我想吃辣，预算35", MockMCPClient())
+
+
+def test_e8_progress_lines_without_path_is_explicit():
+    lines = webui.WebApp(progress_path=None).progress_lines(_demo_result())
+    assert any("未启用" in ln for ln in lines), "未配置进度时必须明说，不得静默"
+
+
+def test_e8_progress_lines_records_to_disk(tmp_path):
+    pf = tmp_path / "progress.json"
+    app = webui.WebApp(progress_path=str(pf))
+    lines = app.progress_lines(_demo_result())
+    assert lines and lines[0]
+    assert pf.exists(), "启用 --progress 后必须落盘"
+    # 同一任务二次执行：防刷分分支（重复挑战不计经验）
+    lines2 = app.progress_lines(_demo_result())
+    assert lines2, "第二次执行不得静默失败"
+
+
+def test_e8_progress_lines_unwritable_path_reports_clearly(tmp_path):
+    # 父路径是普通文件：save_progress 的原子写在落临时文件时必炸
+    # （NotADirectoryError ⊂ OSError）——用户把 --progress 指到坏路径的真实场景
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x", encoding="utf-8")
+    app = webui.WebApp(progress_path=str(blocker / "progress.json"))
+    lines = app.progress_lines(_demo_result())
+    assert any("进度文件不可用" in ln for ln in lines), "IO 失败必须如实上报"
+
+
+def test_e8_serve_refuses_non_localhost_without_allow_lan():
+    with pytest.raises(SystemExit) as ei:
+        webui.serve(host="0.0.0.0", port=0, allow_lan=False)
+    assert ei.value.code != 0
+    msg = str(ei.value)
+    assert "localhost" in msg and "allow-lan" in msg, "守卫提示须说明风险与显式放行方式"
+
+
+def test_e8_serve_reports_port_conflict():
+    import socket
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    port = s.getsockname()[1]
+    try:
+        with pytest.raises(SystemExit) as ei:
+            webui.serve(host="127.0.0.1", port=port, allow_lan=False)
+        assert "无法监听" in str(ei.value), "端口占用必须给出可操作提示"
+    finally:
+        s.close()

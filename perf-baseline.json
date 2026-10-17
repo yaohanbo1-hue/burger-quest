@@ -1,0 +1,32 @@
+{
+  "cold_start": {
+    "runs_ms": [
+      798.2,
+      796.8,
+      868.7,
+      1003.5,
+      1071.3
+    ],
+    "median_ms": 868.7
+  },
+  "demo_e2e": {
+    "wall_ms": 1276.9,
+    "peak_rss_mb": 9.7,
+    "rss_samples": 62
+  },
+  "nlparser": {
+    "median_ms": 0.03,
+    "p95_ms": 0.034,
+    "samples": 20
+  },
+  "card_render": {
+    "wall_ms": 0.24,
+    "html_kb": 11.6
+  },
+  "test_suite": {
+    "wall_s": 67.0,
+    "cases": 652
+  },
+  "python": "3.13.14",
+  "platform": "win32"
+}

@@ -4,7 +4,9 @@
 文本信封格式返回，验证 quest 全流程（配送链路/多候选/无效编码）等路径。
 """
 import json
+import os
 import types
+from unittest import mock
 
 import pytest
 
@@ -345,3 +347,41 @@ def test_demo_help_mentions_fixture_and_offline(capsys):
     out = capsys.readouterr().out
     assert "--fixture" in out
     assert "离线" in out
+
+
+# ===========================================================================
+# `python -m burger_quest` 入口（__main__.py 此前 0% 覆盖，技术债清偿）
+# ===========================================================================
+
+
+def test_python_dash_m_entry_point_runs(capsys):
+    """runpy 以 __main__ 身份真实执行入口模块，验证 -m 接线可用。"""
+    import runpy
+    import sys
+
+    saved = sys.argv
+    sys.argv = ["burger_quest", "--version"]
+    try:
+        with pytest.raises(SystemExit) as ei:
+            runpy.run_module("burger_quest", run_name="__main__")
+    finally:
+        sys.argv = saved
+    assert ei.value.code == 0
+    assert "0.1.0" in capsys.readouterr().out
+
+
+def test_python_dash_m_entry_point_propagates_exit_code(capsys):
+    """入口不吞退出码：业务失败（如缺 Token）的 rc 必须透传到进程。"""
+    import runpy
+    import sys
+
+    saved = sys.argv
+    sys.argv = ["burger_quest", "quest", "我想吃辣，预算35"]  # 无 Token，应 rc=2
+    env_missing = {k: v for k, v in dict(os.environ).items() if k != "MCD_MCP_TOKEN"}
+    with mock.patch.dict(os.environ, env_missing, clear=True):
+        try:
+            with pytest.raises(SystemExit) as ei:
+                runpy.run_module("burger_quest", run_name="__main__")
+        finally:
+            sys.argv = saved
+    assert ei.value.code == 2, "入口把业务退出码吞了"
