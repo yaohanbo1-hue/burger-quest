@@ -23,7 +23,7 @@
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 from .models import (
     Constraints,
@@ -44,8 +44,15 @@ MAX_OPTIONS = 3  # 最多三个可比较方案
 # 餐品分类（启发式，用于搭配均衡）
 # ---------------------------------------------------------------------------
 CATEGORY_RULES = [
-    # 主食优先：套餐/汉堡即使名字里带「麦乐鸡/鸡翅」等小食词也是主食
-    ("main", ["汉堡", "堡", "套餐", "饭", "卷", "盒", "主食", "全餐", "四件套", "三件套", "随心选"]),
+    # 主食优先：套餐/汉堡即使名字里带「麦乐鸡/鸡翅」等小食词也是主食。
+    # 2026-10-18 补充早餐系列名：菜单骨架阶段 item.name 为空（名称要算价后
+    # 才有），只能靠 category 判断；「麦满分系列」「厚松饼堡系列」等不含
+    # 「堡」字的系列此前全部落到 other，导致短名单里主食只剩 1 个
+    #（用户实测：三个方案全是同一款猪柳炒双蛋堡）。
+    ("main", [
+        "汉堡", "堡", "套餐", "饭", "卷", "盒", "主食", "全餐", "四件套", "三件套", "随心选",
+        "麦满分", "满堡", "松饼", "热香饼",
+    ]),
     ("drink", ["可乐", "雪碧", "芬达", "果汁", "咖啡", "茶", "奶", "饮料", "饮品", "冰旋"]),
     ("dessert", ["甜筒", "冰淇淋", "圣代", "麦旋风", "甜品"]),
     ("side", ["薯条", "薯", "鸡翅", "麦乐鸡", "玉米", "沙拉", "派", "洋葱圈", "小食", "薯饼"]),
@@ -311,6 +318,11 @@ def _build_candidates(
     candidates: list[list[PlanItem]] = []
     seen = set()
 
+    # 先按模板准备候选层，再「按层铺开」（见下方循环）：
+    # 这是 2026-10-18 的第二个修复——此前按模板顺序铺开，第一个模板的
+    # 多层候选就可能吃满 max_candidates，导致后面模板的「形态」（如单主食、
+    # 双主食）完全没机会出现。按层铺开保证每种形态都有候选位。
+    prepared: list[tuple[list[list[PlanItem]], int, int, list[MenuItem | None], list[MenuItem | None]]] = []
     for _tname, slots in _templates(c):
         main_n = slots.get("main", 1)
         side_n = slots.get("side", 0)
@@ -320,34 +332,71 @@ def _build_candidates(
             continue
         # 多人分享：优先两个不同主食各一份；单人双主食：同一主食两份。
         # 紧预算时额外纳入最便宜主食（价格也是候选维度），并标注「主食少于人数」。
-        main_combos: list[list[PlanItem]] = []
+        # 主食多样性（2026-10-18 用户反馈）：mains[1] 往往只是同 series 的
+        # 第二款（例如都属「炒双蛋堡系列」），换成它观感仍是「同款堆量」。
+        # 优先挑一个**不同 series（category）**的主食作为「换口味」候选。
+        alt_main = next(
+            (m for m in mains[1:] if (m.category or "") != (mains[0].category or "")),
+            None,
+        )
+        # 每个模板最多两层：第 1 层主角 mains[0]，第 2 层换 series 的替补。
+        # 紧预算时替补优先取「不同 series 的更便宜主食」（价格是真实决策维度）；
+        # 若最便宜主食与主角同 series，则仍用 alt_main（多样性优先于微省几元）。
+        layers: list[list[PlanItem]] = []
         if main_n >= 2 and c.people >= 2 and len(mains) >= 2:
-            main_combos.append([PlanItem(mains[0], 1), PlanItem(mains[1], 1)])
-        main_combos.append([PlanItem(mains[0], main_n)])
-        if len(mains) > 1 and main_n == 1:
-            main_combos.append([PlanItem(mains[1], 1)])
+            layers.append([PlanItem(mains[0], 1), PlanItem(mains[1], 1)])
+        layers.append([PlanItem(mains[0], main_n)])
+        second = alt_main
+        # 预算稳定性优先于多样性：换 series 的主食若比「分数第二」贵出一档
+        #（>30%），紧预算下会占掉本可落在预算内的候选位（2026-10-18 回归：
+        # 预算 35 两人场景方案数从 3 掉到 2）。此时退回 mains[1]。
+        if second is not None and len(mains) > 1:
+            alt_price = second.price_cents or 0
+            fallback_price = mains[1].price_cents or 0
+            if fallback_price and alt_price > fallback_price * 1.3:
+                second = mains[1]
+        if second is not None and main_n == 1:
+            layers.append([PlanItem(second, 1)])
+        # 紧预算：额外纳入最便宜主食（价格是真实决策维度）。该分支原在
+        # main_combos 里，重构为分层后保留，避免预算内候选变少（2026-10-18
+        # 回归：删掉它会让「预算 35 两人」方案数从 3 掉到 2）。
         if c.budget_cents is not None and c.budget_cents <= 4500 and len(mains) > 2:
             cheapest = min(mains, key=lambda m: (m.price_cents or 0, m.code))
-            if all(pi.item.code != cheapest.code for combo in main_combos for pi in combo):
-                main_combos.append([PlanItem(cheapest, main_n)])
-        # 品类池为空时跳过该槽位（不是丢弃整个组合）
-        side_pool = ranked["side"][:1] if side_n and ranked["side"] else [None]
-        drink_pool = ranked["drink"][:1] if drink_n and ranked["drink"] else [None]
-        for main_combo in main_combos:
-            for s in side_pool:
-                for d in drink_pool:
-                    combo = list(main_combo)
-                    if s is not None:
-                        combo.append(PlanItem(s, side_n))
-                    if d is not None:
-                        combo.append(PlanItem(d, drink_n))
-                    key = tuple(sorted((pi.item.code, pi.qty) for pi in combo))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    candidates.append(combo)
-                    if len(candidates) >= max_candidates:
-                        return candidates
+            if all(pi.item.code != cheapest.code for combo in layers for pi in combo):
+                layers.append([PlanItem(cheapest, main_n)])
+        # 品类池为空时跳过该槽位（不是丢弃整个组合）；取前 2 个并按层轮转，
+        # 避免所有方案永远共用同一份小食/饮品（此前只取 [:1]，三个方案会是
+        # 「同一主食 ×1 / +同一杯豆浆 / ×2+同一杯豆浆」）。
+        side_pool: list[MenuItem | None] = (
+            cast(list[MenuItem | None], ranked["side"][:2]) if side_n and ranked["side"] else [None]
+        )
+        drink_pool: list[MenuItem | None] = (
+            cast(list[MenuItem | None], ranked["drink"][:2]) if drink_n and ranked["drink"] else [None]
+        )
+        prepared.append((layers, side_n, drink_n, side_pool, drink_pool))
+
+    # 按层铺开：第 0 层是每个模板的「主角」形态（保证覆盖单主食/加饮品/
+    # 全餐/双主食等），第 1、2 层补「换系列」与「紧预算最便宜主食」的多样性。
+    max_layers = max((len(layers) for layers, *_ in prepared), default=0)
+    for layer_idx in range(max_layers):
+        for layers, side_n, drink_n, side_pool, drink_pool in prepared:
+            if layer_idx >= len(layers):
+                continue
+            main_combo = layers[layer_idx]
+            s = side_pool[layer_idx % len(side_pool)]
+            d = drink_pool[layer_idx % len(drink_pool)]
+            combo = list(main_combo)
+            if s is not None:
+                combo.append(PlanItem(s, side_n))
+            if d is not None:
+                combo.append(PlanItem(d, drink_n))
+            key = tuple(sorted((pi.item.code, pi.qty) for pi in combo))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(combo)
+            if len(candidates) >= max_candidates:
+                return candidates
     # 兜底：菜单里没有主食（或全被避免）时，用池内任意有价餐品凑「单人尝鲜」
     if not candidates:
         any_items = pool[:2]
@@ -503,6 +552,18 @@ def build_plan(
     if not priced:
         warnings.append("当前门店没有带价格的餐品数据，无法生成方案")
         return [], warnings
+
+    # 口味零命中的原因说明（2026-10-18 用户反馈：每个方案下只有重复的
+    # 「口味偏好未被命中」小字，用户无法判断是「引擎没去找」还是「菜单真没有」）。
+    # 这里全局说明一次业务事实：官方菜单里确实没有该口味餐品——不猜、不编造。
+    if c.tastes:
+        tastes_cn = "/".join(TASTE_CN.get(t, t) for t in c.tastes)
+        if not any(taste_hit(m, c.tastes) for m in priced):
+            warnings.append(
+                f"当前门店本时段可选餐品中没有{tastes_cn}口味的餐品"
+                f"（官方菜单返回 {len(priced)} 个带价餐品，均未匹配{tastes_cn}）；"
+                "已按预算与搭配生成方案，未编造口味"
+            )
 
     candidates = _build_candidates(priced, c, nutrition)
     if not candidates:
@@ -763,6 +824,21 @@ def _option_title(opt: PlanOption, c: Constraints) -> str:
         base = "双主食饱腹阵型"
     else:
         base = "标准探索阵型"
+    # 编制后缀（2026-10-18 用户反馈）：同一阵型名下会同时出现多个方案
+    # （例如三份「省钱精算阵型」），标题完全重复、无法区分。按实际编制补
+    # 简短后缀；阵型名保留作前缀（卡片/CLI 既有契约与测试断言不变）。
+    main_qty = sum(pi.qty for pi in opt.items if classify(pi.item) == "main")
+    main_names = [pi.item.name for pi in opt.items if classify(pi.item) == "main" and pi.item.name]
+    extras = [name for cat, name in (("side", "小食"), ("drink", "饮品")) if cat in cats]
+    parts: list[str] = []
+    if main_names:
+        # 用主食名做后缀：同一阵型名下多个方案时（如三个「省钱精算阵型」），
+        # 用户一眼能看出差异在哪（换的是哪个主食），而不是只看到重复标题。
+        parts.append(f"{main_names[0]}×{main_qty}" if main_qty >= 2 else main_names[0])
+    elif main_qty >= 2:
+        parts.append(f"主食×{main_qty}")
+    parts.extend(extras)
+    suffix = "·" + ("+".join(parts) if parts else "单点")
     if opt.discount_cents:
-        base += "·已叠券"
-    return base
+        suffix += "·已叠券"
+    return base + suffix

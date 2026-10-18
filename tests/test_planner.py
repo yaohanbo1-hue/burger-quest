@@ -110,3 +110,59 @@ def test_deterministic(client, menu, coupons, nutrition):
     o2, _ = build_plan(c, menu, coupons, nutrition, fn)
     assert [o.item_names() for o in o1] == [o.item_names() for o in o2]
     assert [o.total_cents for o in o1] == [o.total_cents for o in o2]
+
+
+# ===========================================================================
+# 推荐多样性与早餐分类（2026-10-18 用户网页实测反馈回归）
+#
+# 背景：用户实测「预算 100，想吃辣」时，三个方案全是同一款「猪柳炒双蛋堡」，
+# 标题也都叫「省钱精算阵型」。三层根因：
+# 1) 菜单骨架阶段 item.name 为空，「麦满分系列」等分类名不含「堡」→ classify
+#    返回 other → 短名单里主食只剩 1 个（早餐时段尤其明显）；
+# 2) _build_candidates 的 side/drink 只取榜首、每个模板都用 mains[0] →
+#    三个方案变成「同款 ×1 / +同款饮品 / ×2+同款饮品」；
+# 3) _option_title 只看约束不看内容 → 同一阵型名在多个方案上重复。
+# 以下用例锁死修复后的行为，防止回归。
+# ===========================================================================
+
+
+def test_classify_breakfast_series_is_main():
+    """骨架阶段名称为空时，早餐主食系列必须按分类名识别为主食。"""
+    from burger_quest.planner import classify
+
+    for cat in ("麦满分系列", "厚松饼堡\n系列", "早安营养卷", "炒双蛋堡\n系列"):
+        assert classify(MenuItem(code="X", name="", category=cat)) == "main", cat
+
+
+def test_candidates_cover_multiple_main_series(client, menu, nutrition):
+    """有多个系列主食时，候选不能只用 mains[0] 一种主食。"""
+    from burger_quest.planner import _build_candidates, classify
+
+    c = nlparser.parse("预算100，想吃辣，一个人")
+    cands = _build_candidates(menu, c, nutrition)
+    used = {pi.item.code for combo in cands for pi in combo if classify(pi.item) == "main"}
+    assert len(used) >= 2, "候选主食必须覆盖至少两个不同餐品（否则必然同款堆量）"
+
+
+def test_option_titles_are_distinct_and_show_main(client, menu, coupons, nutrition):
+    """同一阵型名下多个方案时，标题必须可区分（含主食名）。"""
+    c = nlparser.parse("预算100，想吃辣，一个人")
+    options, _ = build_plan(c, menu, coupons, nutrition, price_fn_factory(client))
+    assert len(options) >= 2
+    titles = [o.title for o in options]
+    assert len(set(titles)) == len(titles), f"标题重复：{titles}"
+    assert all("省钱精算阵型" in t for t in titles)
+    assert any("麦辣" in t or "堡" in t for t in titles), "标题应含主食名便于区分"
+
+
+def test_taste_miss_warning_explains_menu_fact():
+    """菜单里没有该口味时，全局 warnings 必须说明是菜单本身没有。"""
+    no_spicy = [MenuItem(code="A1", name="薯饼", category="小食", price_cents=1000, tags=("小食",))]
+    c = nlparser.parse("想吃辣，预算30，一个人")
+
+    def fn(items, coupon_ids):
+        cents = sum((pi.item.price_cents or 0) * pi.qty for pi in items)
+        return PriceQuote(total_cents=cents, original_cents=cents, ok=True)
+
+    _options, warnings = build_plan(c, no_spicy, [], [], fn)
+    assert any("没有辣味口味的餐品" in w for w in warnings), warnings
