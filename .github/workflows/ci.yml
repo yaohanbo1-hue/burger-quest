@@ -118,8 +118,10 @@ jobs:
 
       - name: Offline demos still reproducible
         run: |
-          python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人" >/dev/null
+          python -m burger_quest demo "我想吃辣，预算35，到店自取，在南山科技园，一个人" >/dev/null
           python -m burger_quest demo "预算5块，想吃汉堡" >/dev/null || true   # 失败场景：退出码 1 属预期
+          # 外送场景：delivery-query-stores 未验证已移除，有地址时明确提示能力边界（退出码 1 属预期）
+          python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人" >/dev/null || true
           python -m burger_quest smoke --demo >/dev/null
           echo "offline demos OK"
 
