@@ -54,8 +54,12 @@ CATEGORY_RULES = [
         "麦满分", "满堡", "松饼", "热香饼",
     ]),
     ("drink", ["可乐", "雪碧", "芬达", "果汁", "咖啡", "茶", "奶", "饮料", "饮品", "冰旋"]),
-    ("dessert", ["甜筒", "冰淇淋", "圣代", "麦旋风", "甜品"]),
+    # side 先于 dessert（2026-10-18）：官方「小食甜品 /其他」是混合分类，
+    # 分类名同时含「小食」和「甜品」，此前 dessert 规则先命中，把薯条/麦乐鸡
+    # 整批判成甜品 → 短名单 side 池只剩「小食拼盘/多人餐」（单价高，一加就
+    # 超预算）。具体的甜品词（冰淇淋/圣代/甜筒/麦旋风/派）仍能正确判 dessert。
     ("side", ["薯条", "薯", "鸡翅", "麦乐鸡", "玉米", "沙拉", "派", "洋葱圈", "小食", "薯饼"]),
+    ("dessert", ["甜筒", "冰淇淋", "圣代", "麦旋风", "甜品"]),
 ]
 
 CATEGORY_CN = {"main": "主食", "side": "小食", "drink": "饮料", "dessert": "甜品", "other": "其他"}
@@ -70,7 +74,9 @@ MOOD_AFFINITY = {
 
 # 口味命中关键词（评分与「未满足」判定共用一张表，避免两处逻辑不一致）
 TASTE_HIT_KEYWORDS = {
-    "spicy": ("辣",),
+    # 「龙焰」是官方辣味产品的命名（龙焰鸡腿堡），名字里没有「辣」字但确有
+    # 辣度；2026-10-18 实测：不加这条时「吃辣」与「不吃辣」会给出相同方案。
+    "spicy": ("辣", "龙焰"),
     "sweet": ("甜",),
     "crispy": ("脆", "酥"),
     "burger": ("堡",),
@@ -324,6 +330,7 @@ def _build_candidates(
     # 双主食）完全没机会出现。按层铺开保证每种形态都有候选位。
     prepared: list[tuple[list[list[PlanItem]], int, int, list[MenuItem | None], list[MenuItem | None]]] = []
     for _tname, slots in _templates(c):
+        slots = dict(slots)
         main_n = slots.get("main", 1)
         side_n = slots.get("side", 0)
         drink_n = slots.get("drink", 0)
@@ -373,6 +380,10 @@ def _build_candidates(
         drink_pool: list[MenuItem | None] = (
             cast(list[MenuItem | None], ranked["drink"][:2]) if drink_n and ranked["drink"] else [None]
         )
+        if drink_n and ranked["drink"] and c.max_drink_qty is not None:
+            # 少饮偏好（「不想点太多饮料」）：第 2 层换成「不带饮品」的省钱版，
+            # 避免「完整套餐」把预算内候选挤光（2026-10-18 回归：方案数 3→2）。
+            drink_pool = [drink_pool[0], None, *drink_pool[1:]]
         prepared.append((layers, side_n, drink_n, side_pool, drink_pool))
 
     # 按层铺开：第 0 层是每个模板的「主角」形态（保证覆盖单主食/加饮品/

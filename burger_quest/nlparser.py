@@ -79,6 +79,12 @@ AVOID_DRINK_PAT = re.compile(
     r"|饮料(?:就?)?(?:不要|免|去掉|不用)"
 )
 
+# 小食/配餐偏好（2026-10-18 用户反馈：说了「要一份小食」但方案没加）。
+# 正向：明确点出小食类词；负向（不吃/不要）优先排除，避免把「不吃鸡翅」
+# 误判成「想要小食」。
+SIDE_PAT = re.compile(r"(?:小食|小吃|配餐|薯条|薯饼|鸡翅|麦乐鸡|鸡块|洋葱圈|玉米杯)")
+AVOID_SIDE_PAT = re.compile(r"(?:不吃|不要|不点|别|忌|去掉|不加|免了?)[^，。,.!！?？]{0,6}(?:小食|小吃|配餐|薯条|薯饼|鸡翅|麦乐鸡|鸡块|洋葱圈|玉米杯)")
+
 # ---------------------------------------------------------------------------
 # 预算（2026-10-14 修复：营养单位守卫 + 模糊区间 + 多值取严）
 # ---------------------------------------------------------------------------
@@ -548,6 +554,15 @@ def parse(text: str) -> Constraints:
         notes.append("识别到「不要饮料」，候选组合将不含饮品")
 
     # -- 未提供条件的明示 ---------------------------------------------------
+    # -- 小食/配餐偏好（2026-10-18 用户反馈：说了「要小食」但方案没加） -----
+    prefer_side = False
+    if SIDE_PAT.search(text) and not AVOID_SIDE_PAT.search(text):
+        prefer_side = True
+        sources["prefer_side"] = "explicit"
+        notes.append("识别到「要小食/配餐」偏好，方案会尽量包含小食")
+    elif AVOID_SIDE_PAT.search(text):
+        notes.append("识别到「不要小食/配餐」：方案不会主动搭配这类小食")
+
     if budget is None:
         notes.append("未识别到预算，将不设预算上限（仍会标注真实总价）")
     if sources.get("dining_mode") == "default":
@@ -570,6 +585,7 @@ def parse(text: str) -> Constraints:
         max_calories=max_cal,
         min_protein_g=min_protein,
         rich=rich,
+        prefer_side=prefer_side,
         avoid_categories=avoid_categories,
         max_drink_qty=max_drink_qty,
         fuzzy_budget=fuzzy,

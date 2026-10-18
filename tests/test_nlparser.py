@@ -59,3 +59,20 @@ def test_rich_preference():
 def test_notes_for_missing_budget():
     c = nlparser.parse("来点吃的")
     assert any("未识别到预算" in n for n in c.notes)
+
+
+# --- 小食/配餐偏好（2026-10-18 用户反馈：说了「要一份小食」但方案没加） -----
+
+
+def test_prefer_side_parsed_from_explicit_request():
+    for text in ("预算100，要一份小食", "来点薯条", "加个鸡翅", "配一份小食套餐"):
+        assert nlparser.parse(text).prefer_side is True, text
+
+
+def test_prefer_side_not_set_when_avoiding_side():
+    assert nlparser.parse("不吃鸡翅").prefer_side is False
+    assert nlparser.parse("不要小食").prefer_side is False
+
+
+def test_prefer_side_not_set_by_default():
+    assert nlparser.parse("预算35，想吃辣").prefer_side is False

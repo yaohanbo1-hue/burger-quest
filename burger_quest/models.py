@@ -144,6 +144,7 @@ class Constraints:
     max_calories: Optional[float] = None
     min_protein_g: Optional[float] = None
     rich: bool = False  # 丰盛偏好：预算内优先更丰富的组合
+    prefer_side: bool = False  # 明确想要小食/配餐（2026-10-18）：模板保证 side 槽位 ≥1
     prefer_combo: bool = True
     avoid_categories: tuple = ()  # 明确不要的品类（如 ("drink",)——「不要饮料」）
     max_drink_qty: Optional[int] = None  # 饮料数量软上限（「不想点太多饮料」；None=不限制）
@@ -204,6 +205,8 @@ class Constraints:
             parts.append(f"热量 ≤ {self.max_calories:.0f} 千卡")
         if self.min_protein_g:
             parts.append(f"蛋白质 ≥ {self.min_protein_g:.0f}g")
+        if self.prefer_side:
+            parts.append("要小食")
         if "drink" in self.avoid_categories:
             parts.append("不要饮料")
         elif self.max_drink_qty is not None:

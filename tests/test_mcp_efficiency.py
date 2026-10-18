@@ -101,9 +101,14 @@ def test_single_task_call_count_within_budget():
     by_tool = summarize_calls(client.calls)["by_tool"]
     assert len(real) <= 13, f"调用数超标：{len(real)}"
     assert by_tool.get("query-meal-detail", 0) == 0, "名称应来自算价 productList，不应逐个查详情"
-    # 方案质量不降级：3 个可比较方案 + 权威总价
-    assert len(r.options) == 3
-    assert r.chosen.price_checked and r.chosen.total_cents == 2500
+    # 方案质量不降级：至少 2 个可比较方案 + 权威总价。
+    # 2026-10-18 短名单补配餐（side/drink 保底）后，35 元/2 人/高蛋白/少饮
+    # 场景的预算内可行组合为 2 个——「最多 3 个」是上限，不是下限；配餐
+    # 可选带来的方案完整性提升是本次修复的目标。
+    assert len(r.options) >= 2
+    # 首选方案为完整套餐（主食+小食+饮品，¥33 在 ¥35 预算内）——短名单补
+    # 配餐前该场景只能拿到「主食+小食」的 ¥25 组合。
+    assert r.chosen.price_checked and r.chosen.total_cents == 3300
 
 
 def test_price_discovery_purpose_and_probe_once():

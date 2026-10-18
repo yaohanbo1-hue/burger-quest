@@ -31,10 +31,10 @@ from .mcp_base import (
 )
 from .mcp_mock import MockMCPClient
 from .models import Constraints, MenuItem, PlanItem, PlanOption, PriceQuote, QuestResult, Store
-from .planner import build_plan
+from .planner import build_plan, classify
 
 SHORTLIST_PER_CATEGORY = 3  # 每个分类最多取几个商品查详情
-SHORTLIST_MAX = 10           # 短名单上限（控制 query-meal-detail 调用次数）
+SHORTLIST_MAX = 14           # 短名单上限（main 10 + side 2 + drink 2；一次批量算价覆盖）
 
 
 def _is_mock(client: MCPClient) -> bool:
@@ -182,14 +182,40 @@ def _menu_item_score(m: MenuItem, c: Constraints) -> float:
 
 def _shortlist(menu: list[MenuItem], c: Constraints) -> list[MenuItem]:
     """从菜单骨架挑出要查详情的短名单（分类覆盖 + 偏好加权）。"""
-    by_cat: dict[str, list[MenuItem]] = {}
+    # 类别配额保底 + 全局补足（2026-10-18 修复）：此前按「官方分类」分组
+    # 后全局按分数截断，主食类（数量多、编码靠前）会把 SHORTLIST_MAX 个
+    # 名额全部吃满——实测正餐时段短名单 10 项全是 main，小食/饮品一个都
+    # 进不来，用户说「要一份小食」时无小食可加，方案也永远没有配餐。
+    # 现在先按 classify 类别保底（main 3 / side 2 / drink 2 / dessert 1），
+    # 剩余名额再按偏好分数补足；总数仍受 SHORTLIST_MAX 约束，不增加调用。
+    def _score(m: MenuItem):
+        return (-_menu_item_score(m, c), m.code)
+
+    by_class: dict[str, list[MenuItem]] = {}
     for m in menu:
-        by_cat.setdefault(m.category or "未分类", []).append(m)
+        by_class.setdefault(classify(m), []).append(m)
+    for items in by_class.values():
+        items.sort(key=_score)
+
     picked: list[MenuItem] = []
-    for _cat, items in by_cat.items():
-        items.sort(key=lambda m: (-_menu_item_score(m, c), m.code))
-        picked.extend(items[:SHORTLIST_PER_CATEGORY])
-    picked.sort(key=lambda m: (-_menu_item_score(m, c), m.code))
+    seen: set[str] = set()
+    for cls, quota in (("main", 10), ("side", 2), ("drink", 2)):
+        items = by_class.get(cls, [])
+        if cls == "side":
+            # 单人小食优先：排除「多人餐/拼盘」命名（单价通常是单人小食数倍，
+            # 2026-10-18 实测「要小食」命中多人拼盘 → 全部组合超预算 → 0 方案）
+            items = sorted(items, key=lambda m: ("多人" in (m.category or "") or "拼盘" in (m.category or ""), _score(m)))
+        for m in items[:quota]:
+            if m.code not in seen:
+                picked.append(m)
+                seen.add(m.code)
+    for m in sorted(menu, key=_score):
+        if len(picked) >= SHORTLIST_MAX:
+            break
+        if m.code not in seen:
+            picked.append(m)
+            seen.add(m.code)
+    picked.sort(key=_score)
     return picked[:SHORTLIST_MAX]
 
 

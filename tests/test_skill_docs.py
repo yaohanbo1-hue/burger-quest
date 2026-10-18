@@ -130,26 +130,26 @@ def test_skill_example_1_matches_engine():
 
 
 def test_skill_example_2_matches_engine():
-    """示例 2（¥100 两人丰盛）：原价 ¥91、优惠 ¥5、应付 ¥86、剩 ¥14。"""
+    """示例 2（¥100 两人丰盛）：原价 ¥107、优惠 ¥8、应付 ¥99、剩 ¥1。"""
     r = run_quest("我们两个人想吃点好的，预算 100，堂食", MockMCPClient())
     o = r.chosen
     assert o is not None
-    assert o.original_cents == 9100
-    assert o.discount_cents == 500
-    assert o.total_cents == 8600
-    assert o.remaining_cents == 1400
+    assert o.original_cents == 10700
+    assert o.discount_cents == 800
+    assert o.total_cents == 9900
+    assert o.remaining_cents == 100
     assert o.within_budget is True
 
 
 def test_skill_example_3_matches_engine():
-    """示例 3（低卡 ¥40）：应付 ¥25、热量 540 千卡、蛋白质 26g。"""
+    """示例 3（低卡 ¥40）：应付 ¥25、热量 550 千卡、蛋白质 17g。"""
     r = run_quest("减肥中，想吃低卡的，预算 40，一个人，到店自取", MockMCPClient())
     o = r.chosen
     assert o is not None
     assert o.total_cents == 2500
     assert o.remaining_cents == 1500
-    assert o.nutrition.get("calories_kcal") == 540.0
-    assert o.nutrition.get("protein_g") == 26.0
+    assert o.nutrition.get("calories_kcal") == 550.0
+    assert o.nutrition.get("protein_g") == 17.0
 
 
 def test_skill_frontmatter_valid():

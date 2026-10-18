@@ -329,5 +329,6 @@ def test_demo_low_cal_scenario_still_resolves_exact_nutrition():
 
     r = run_quest("减肥中，想吃低卡的，预算40，到店自取", MockMCPClient())
     assert r.chosen is not None
-    assert r.chosen.nutrition.get("calories_kcal") == 540.0  # 精确匹配汇总值不变
+    # 精确匹配汇总值（2026-10-18 短名单补配餐后推荐构成变化：麦香鱼+可乐 550）
+    assert r.chosen.nutrition.get("calories_kcal") == 550.0
     assert r.chosen.nutrition_complete is True
