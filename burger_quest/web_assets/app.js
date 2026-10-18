@@ -313,5 +313,12 @@
     });
     $("btn-stores").addEventListener("click", queryStores);
     $("btn-progress").addEventListener("click", showProgress);
+    // 常用句式快捷填充（2026-10-18）：点击填入需求框，用户可继续修改再提交
+    document.querySelectorAll("[data-fill]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var t = $("text");
+        if (t) { t.value = btn.getAttribute("data-fill"); t.focus(); }
+      });
+    });
   });
 })();

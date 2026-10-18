@@ -188,6 +188,15 @@ textarea:focus-visible, input:focus-visible, .btn:focus-visible, summary:focus-v
   .footer { color: #c9b98f; }
 }
 
+/* ---------- 常用句式快捷按钮（2026-10-18） ---------- */
+.quick-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+.quick-rows .btn { font-size: 12px; padding: 4px 10px; }
+
 /* ---------- 打印 ---------- */
 @media print {
   .topbar .conn, .actions, .btn { display: none !important; }

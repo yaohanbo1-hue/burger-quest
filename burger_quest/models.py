@@ -211,6 +211,8 @@ class Constraints:
             parts.append("不要饮料")
         elif self.max_drink_qty is not None:
             parts.append(f"饮料 ≤ {self.max_drink_qty} 份")
+        if "side" in self.avoid_categories:
+            parts.append("不要小食")
         return "，".join(parts)
 
 

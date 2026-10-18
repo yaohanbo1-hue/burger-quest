@@ -76,3 +76,38 @@ def test_prefer_side_not_set_when_avoiding_side():
 
 def test_prefer_side_not_set_by_default():
     assert nlparser.parse("预算35，想吃辣").prefer_side is False
+
+
+# --- A 档：口语金额 / 不要小食 / 场景词不当地址（2026-10-18 用户实测短板） ---
+
+
+def test_chinese_hundred_budget():
+    assert nlparser.parse("两个人，一百块以内").budget_cents == 10000
+    assert nlparser.parse("一百五左右").budget_cents == 15000  # 口语「一百五」= 150
+    assert nlparser.parse("一百二十块").budget_cents == 12000
+    assert nlparser.parse("两百块").budget_cents == 20000
+
+
+def test_avoid_side_categories():
+    c = nlparser.parse("预算35，不要饮料，不要小食")
+    assert "drink" in c.avoid_categories and "side" in c.avoid_categories
+    assert c.prefer_side is False
+
+
+def test_scene_words_are_not_locations():
+    # 「在公司加班」「加班到九点」等场景/时间词不是地址，应清洗为空（由服务层提示补充地址）
+    assert nlparser.parse("在公司加班，晚上十点，想吃点热的").location is None
+    assert nlparser.parse("加班到九点，想吃点热的").location is None
+
+
+# --- C 档：主动澄清提示（只提示不猜） ---
+
+
+def test_quantity_hint_is_surfaced():
+    c = nlparser.parse("三个汉堡，两杯可乐")
+    assert any("数量表述" in n for n in c.notes)
+
+
+def test_three_people_is_not_quantity_hint():
+    c = nlparser.parse("三个人，预算100")
+    assert not any("数量表述" in n for n in c.notes)
