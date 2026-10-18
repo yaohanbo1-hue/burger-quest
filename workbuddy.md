@@ -321,7 +321,9 @@ UnicodeEncodeError 崩溃（Linux 不暴露）→ cli.main() 入口 _ensure_utf8
 
 **测试 372 → 406**（tests/test_mcp_healthcheck.py 35 例 + 更新 1 例旧行为用例）；全量绿；compileall / git diff --check 干净；doctor 无 Token exit 2 不回退 Demo；Token 仅经进程环境变量使用，未写入任何文件，输出零泄露（测试断言）。
 
-**下一波（已验证前提下）**：① 有券账户结案优惠券门槛/单位与双券提交语义，并修复已发现的双券缺陷（build_calc_payload 只提交 coupons[0]、mock 按全组算折扣导致演示比真实宽松）；② 有保存地址账户验证外送全链路；③ 套餐换选/特制选项（rounds/modification）展示。
+**下一波（已验证前提下，2026-10-17 当时快照）**：① 有券账户结案优惠券门槛/单位与双券提交语义，并修复已发现的双券缺陷（build_calc_payload 只提交 coupons[0]、mock 按全组算折扣导致演示比真实宽松）；② 有保存地址账户验证外送全链路；③ 套餐换选/特制选项（rounds/modification）展示。
+
+> **状态更新（2026-10-18 最终审计）**：① 中的双券缺陷**已于当日 §5.19 修复**（券按商品序号挂载 + `coupon_sets` 容量守卫 + mock 从 payload 实际提交推导折扣，测试见 `test_tool_contract.py`）；当前仍未结案的只剩：有券账户验证「服务端同单多券接受性」与「优惠券门槛/折扣单位及真实生效」，以及②的有保存地址账户外送全链路。③（套餐换选展示）未做。
 
 ## 5.19 工具契约审计（2026-10-17，官方 Schema 实证）
 

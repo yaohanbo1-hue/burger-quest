@@ -1,7 +1,7 @@
 # 候选版本总验收报告
 
 > 验收时间：2026-10-18（第 8 项「候选版本总验收」）
-> 验收对象：`main` @ `3680ffa`（性能基线与技术债治理）
+> 验收对象：`main` @ `2c1674e`（候选版本总验收报告；首次验收于 `3680ffa`，2026-10-18 最终审计纠偏后更新计数与公开性表述）
 > 验收方式：**全部本地复跑 + CI 实证**，不引用未经本次验证的数字
 
 ## 结论：✅ 通过，可作候选版本交付
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | 1 | 全量测试 | ✅ 657 passed | 本地 `pytest -q`（58.6s） |
 | 2 | 覆盖率 | ✅ 91.44% ≥ 85% 阈值 | `--cov-fail-under=85` 实跑 |
-| 3 | CI 全流水线 | ✅ 6/6 job 绿 | run 39050865928（Windows 3.11/3.12 + Linux 3.10/3.11/3.12/3.13 + Quality gates） |
+| 3 | CI 全流水线 | ✅ 7/7 job 绿 | run 39051218864（Windows 3.11/3.12 + Linux 3.10/3.11/3.12/3.13 + Quality gates，共 7 个 job） |
 | 4 | 类型检查 | ✅ mypy 0 error | 本地复跑（曾 45） |
 | 5 | 安全扫描 | ✅ bandit 0 finding | 本地复跑（曾 12；2 处 `nosec` 均带理由） |
 | 6 | 依赖漏洞 | ✅ pip-audit 无已知漏洞 | 本地复跑 |
@@ -87,7 +87,7 @@ doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%�
 | --- | --- |
 | 引擎源码（20 模块，mypy 零 error） | `burger_quest/` |
 | 测试套件（657 例，91.44%） | `tests/` |
-| Windows 便携发布包（23.7MB + sha256 + 校验 bat） | `dist/`（gitignore，本机留存） |
+| Windows 便携发布包（23.7MB + sha256 + 校验 bat） | `dist/`（**gitignore 排除，仅本机验证产物；当前未随仓库公开发布，评审不可从 GitHub 页面下载**） |
 | 发布包构建/验证脚本 | `tools/build_portable.py`、`tools/verify_portable.py`、`tools/portable-constraints.txt` |
 | 性能基线与回归阈值 | `PERFORMANCE.md` + `perf-baseline.json` + `tools/measure_perf.py` |
 | 技术债台账 | `TECH_DEBT.md` |
@@ -98,6 +98,7 @@ doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%�
 
 1. 真实模式端到端延迟依赖官方服务端与网络，非本项目可控（PERFORMANCE.md §4）；
 2. 便携发布包仅覆盖 Windows（项目目标用户即 Windows 非技术用户）；
-3. 优惠券「有券时优惠是否真实生效」未结案（无有券账户），已在所有面向用户的
+3. **便携发布包当前未公开发布**：产物位于被 `.gitignore` 排除的 `dist/`，仅本机验证产物；仓库无 Release、远端无 `dist/` 目录，评审不可从公开 GitHub 页面下载。如需随评审分发，需另行约定发布方式（如 GitHub Releases）或按 `tools/build_portable.py` 本地构建；
+4. 优惠券「有券时优惠是否真实生效」未结案（无有券账户），已在所有面向用户的
    文档中显式标注；
-4. doctor.py 真实网络失败分支覆盖率 83%（技术债 D1，排障工具主路径已覆盖）。
+5. doctor.py 真实网络失败分支覆盖率 83%（技术债 D1，排障工具主路径已覆盖）。

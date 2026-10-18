@@ -20,10 +20,10 @@
 ## 2. 实际使用的工具（8 个核心 + 2 个外送场景专用）
 
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。
-**场景不同，实际使用的工具并不必然完全相同**：
+**场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 8 个）：
 
-- **8 个核心工具**：任何场景（到店/外送）都会用到；
-- **2 个外送专用工具**（`delivery-query-addresses` / `delivery-query-stores`）：仅外送场景使用，且需要账户已保存配送地址。
+- **8 个核心工具**（`TOOLS_USED`）：项目在用的只读工具全集，但**并非每个任务都会用到全部 8 个**——其中 6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`，外送门店改由 `delivery-query-stores` 提供）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
+- **2 个外送专用工具**（`delivery-query-addresses` / `delivery-query-stores`，登记在 `TOOLS_RESERVED`）：仅外送场景使用，且需要账户已保存配送地址；账户无保存地址时该链路**未验证（BLOCKED）**，程序按诚实失败处理。
 
 | 工具 | 用途 | 在调用链中的位置 |
 | --- | --- | --- |
@@ -333,7 +333,7 @@ code=600010  使用优惠券需要couponId和couponCode
 
 1. **优惠券门槛/单位与真实生效**：本账户 `query-store-coupons` / `query-my-coupons` 2026-10-17 真实复测仍返回 0 张——维持未验证，需有券账户；
 2. **外送全链路**：账户无保存地址（「无地址」诚实失败路径已验证）——维持未验证；
-3. **多券提交语义**（双券试探是否被官方接受）：无券可试——维持未验证。注意：第三轮代码分析已发现「`build_calc_payload` 只提交 `coupons[0]`、mock 却按全组券算折扣」的演示/真实分叉（下一波修复项，见 workbuddy.md §5.19），验证前不得把演示叠券效果当作真实效果。
+3. **多券提交语义**（双券试探是否被官方接受）：无券可试——维持未验证。注意：第三轮代码分析发现的「`build_calc_payload` 只提交 `coupons[0]`、mock 却按全组券算折扣」的演示/真实分叉**已于 2026-10-17 当日修复**（券按商品序号一一挂载 + `coupon_sets` 容量守卫 + mock 从 payload 实际提交的券推导折扣，修复记录见 §3.12 与 workbuddy.md §5.19）；**仍未验证的是服务端对同单多券的接受性**（需有券账户），验证前不得把演示叠券效果当作真实效果。
 
 安全记录：本次体检 Token 仅经**进程级环境变量**传递（`MCD_MCP_TOKEN=… python -m …`），未写入任何文件、日志、卡片或审计；doctor/smoke/quest 输出与 JSON 诊断零 Token 泄露（有专项测试断言）。
 
