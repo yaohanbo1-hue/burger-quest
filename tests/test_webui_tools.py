@@ -182,3 +182,105 @@ def test_api_detail_rejects_bad_reconfigure(tools_srv):
         data={"code": "9900011121", "store_code": "1420762", "reconfigure": {"x": "y"}},
     )
     assert status == 400
+
+
+# ===========================================================================
+# C. 券状态加固（精确空态、data 类型、字段缺失）
+# ===========================================================================
+
+
+def test_coupon_code_499_with_other_message_is_business_error():
+    """只有 code=499 且 message 精确匹配才算无券；否则是真实业务错误。"""
+    with pytest.raises(MCPError) as ei:
+        _classify({"success": False, "code": 499, "message": "系统繁忙", "data": None})
+    assert ei.value.code == 499
+
+
+def test_coupon_text_with_generic_none_word_is_unknown():
+    """含「暂无」但不是官方无券文案 → unknown（不得当成 empty）。"""
+    q = _classify(None, text="暂无可用数据，请检查网络（这不是无券文案）")
+    assert q.state == "unknown"
+
+
+def test_coupon_data_dict_or_str_is_contract_error():
+    for bad in ({"coupons": []}, "oops"):
+        with pytest.raises(MCPError) as ei:
+            _classify({"success": True, "code": 200, "data": bad})
+        assert "契约" in str(ei.value)
+
+
+def test_coupon_entries_missing_required_fields_is_contract_error():
+    with pytest.raises(MCPError) as ei:
+        _classify({"success": True, "code": 200, "data": [{}]})
+    assert "契约" in str(ei.value)
+
+
+# ===========================================================================
+# D. 三类券独立容错（部分失败仍展示成功分区）
+# ===========================================================================
+
+
+class _PartialClient:
+    def __init__(self, fail: set[str] | None = None):
+        self.fail = fail or set()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def available_coupons(self):
+        if "available" in self.fail:
+            raise MCPError("available-coupons", "available boom", code=500)
+        from burger_quest.models import CouponQuery
+
+        return CouponQuery(state="empty", note="官方明确无券")
+
+    def my_coupons(self):
+        if "mine" in self.fail:
+            raise MCPError("query-my-coupons", "mine boom", code=500)
+        return []
+
+    def store_coupons(self, scene):
+        if "store" in self.fail:
+            raise MCPError("query-store-coupons", "store boom", code=500)
+        return []
+
+
+def test_webapp_coupons_available_fails_others_still_run(monkeypatch):
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _PartialClient({"available"}))
+    out = webui.WebApp().coupons("1420762")
+    assert out["state"] == "partial"
+    states = {s["name"]: s["state"] for s in out["sections"]}
+    assert states["可领取（麦麦省）"] == "error"
+    assert states["我的卡包"] == "ok"
+    assert states["门店 1420762 适用"] == "ok"
+
+
+def test_webapp_coupons_mine_fails_others_still_run(monkeypatch):
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _PartialClient({"mine"}))
+    out = webui.WebApp().coupons("1420762")
+    states = {s["name"]: s["state"] for s in out["sections"]}
+    assert states["我的卡包"] == "error"
+    assert states["可领取（麦麦省）"] == "empty"
+    assert out["state"] == "partial"
+
+
+def test_webapp_coupons_store_fails_and_missing(monkeypatch):
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _PartialClient({"store"}))
+    out = webui.WebApp().coupons("1420762")
+    states = {s["name"]: s["state"] for s in out["sections"]}
+    assert states["门店 1420762 适用"] == "error"
+
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _PartialClient())
+    out2 = webui.WebApp().coupons(None)
+    states2 = {s["name"]: s["state"] for s in out2["sections"]}
+    assert states2["门店适用"] == "skipped"
+
+
+def test_webapp_coupons_all_fail_is_error(monkeypatch):
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _PartialClient({"available", "mine", "store"}))
+    out = webui.WebApp().coupons("1420762")
+    assert out["state"] == "error"
+    assert all(s["state"] == "error" for s in out["sections"])

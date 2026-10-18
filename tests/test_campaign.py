@@ -1,7 +1,7 @@
 """campaign-calendar Markdown 解析与降级行为测试（离线，无需 Token）。"""
 import datetime as dt
 
-from burger_quest.campaign import parse_campaign_text, summarize
+from burger_quest.campaign import parse_campaign_result, parse_campaign_text, summarize
 
 SAMPLE = """### 当前时间：2026-10-18 11:39:42
 
@@ -71,3 +71,41 @@ def test_without_official_time_uses_given_today():
     assert items[0].status == "live"  # 「今日」标记优先
     assert items[2].status == "upcoming"
     assert items[3].status == "past"
+
+
+# --- 状态分类（2026-10-18 第三轮）：空列表 ≠ 有效空结果 -----------------------
+
+
+def test_valid_empty_is_empty_not_parse_error():
+    text = "### 活动列表：\n\n#### 暂无活动\n\n本月暂无活动\n"
+    r = parse_campaign_result(text)
+    assert r.state == "empty"
+    assert r.campaigns == []
+
+
+def test_unrecognized_text_is_parse_error():
+    r = parse_campaign_result("服务升级中，请稍后再试")
+    assert r.state == "parse_error"
+    assert r.campaigns == []
+
+
+def test_structure_without_parsable_events_is_parse_error():
+    """有日期段但一条活动都解析不出 → 格式可能变了，必须报 parse_error。"""
+    text = "### 活动列表：\n\n#### 2026年10月18日 今日\n\n- 新格式：活动名 | 时间\n"
+    r = parse_campaign_result(text)
+    assert r.state == "parse_error"
+    assert "格式" in r.reason or "完整" in r.reason
+
+
+def test_partial_format_is_ok_with_reason():
+    """混合格式：可识别的保留为 ok，并在 reason 中说明未识别条目数。"""
+    text = (
+        "### 活动列表：\n\n"
+        "-   **活动标题**：游离活动（在日期段之前，无法归属日期）\n"
+        "#### 2026年10月18日 今日\n\n"
+        "-   **活动标题**：正常活动\n    **活动内容介绍**：正常内容\n"
+    )
+    r = parse_campaign_result(text)
+    assert r.state == "ok"
+    assert [c.title for c in r.campaigns] == ["正常活动"]
+    assert "未能解析" in r.reason

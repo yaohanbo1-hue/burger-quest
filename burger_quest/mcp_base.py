@@ -49,6 +49,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .campaign import CampaignParseResult
 from .models import (
     Campaign,
     Coupon,
@@ -313,12 +314,13 @@ class MCPClient(ABC):
         """query-nearby-stores（searchType=2 按位置）-> 附近门店列表"""
 
     @abstractmethod
-    def campaign_calendar(self, specified_date: Optional[str] = None) -> list[Campaign]:
-        """campaign-calendar（只读）-> 官方活动日历。
+    def campaign_calendar(self, specified_date: Optional[str] = None) -> CampaignParseResult:
+        """campaign-calendar（只读）-> CampaignParseResult（ok / empty / parse_error）。
 
         官方返回 Markdown 文本（非 JSON 信封）；解析见 campaign.py。
         specified_date：yyyy-MM-dd，可选；传入时官方返回该日前后各一个有活动的日子。
-        仅展示官方活动，不派生奖品/优惠金额/资格。
+        仅展示官方活动，不派生奖品/优惠金额/资格。**空列表不等于有效空结果**：
+        无法识别结构时必须返回 parse_error。
         """
 
     @abstractmethod

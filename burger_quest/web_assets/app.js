@@ -319,8 +319,12 @@
         return;
       }
       if (d.state === "empty") {
-        out.appendChild(stateBanner("no_result", "官方返回空活动列表（可能是当月暂无活动）"));
+        out.appendChild(stateBanner("no_result", "官方明确：当前没有活动（有效空结果）"));
         return;
+      }
+      if (d.state === "parse_error") {
+        out.appendChild(stateBanner("partial", "活动解析失败：" + (d.reason || "官方格式可能已变化")));
+        out.appendChild(el("p", "hint", "无法确认活动列表是否完整；以下仅展示已识别条目，不补造内容。"));
       }
       var counts = d.counts || {};
       out.appendChild(el("h3", null, "麦门限时委托 · 进行中 " + (counts.live || 0) + " · 未来 " + (counts.upcoming || 0) + " · 往期 " + (counts.past || 0)));
@@ -351,6 +355,9 @@
         var out = $("tools-out");
         clear(out);
         if (d.state === "error") { out.appendChild(stateBanner("connection", d.error || "券查询失败")); return; }
+        if (d.state === "partial") {
+          out.appendChild(stateBanner("partial", "部分分区查询失败：已成功的分区照常展示，失败分区不会显示为 0 张"));
+        }
         (d.sections || []).forEach(function (s) {
           out.appendChild(el("h4", null, s.name));
           if (s.state === "error") {

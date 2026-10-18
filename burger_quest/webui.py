@@ -534,11 +534,13 @@ class WebApp:
         now = datetime.datetime.now().isoformat(timespec="seconds")
         try:
             with self._client() as client:
-                items = client.campaign_calendar()
+                parsed = client.campaign_calendar()
         except MCPError as e:
             return {"state": "error", "error": str(e), "generated_at": now, "counts": {}, "campaigns": []}
+        items = parsed.campaigns
         return {
-            "state": "ok" if items else "empty",
+            "state": parsed.state,  # ok / empty / parse_error
+            "reason": parsed.reason,
             "generated_at": now,
             "source": "campaign-calendar",
             "counts": campaign_mod.summarize(items),
@@ -572,23 +574,27 @@ class WebApp:
 
         now = datetime.datetime.now().isoformat(timespec="seconds")
         sections: list[dict] = []
+        conn_error = ""
         try:
             with self._client() as client:
-                q = client.available_coupons()
-                sections.append(
-                    {
-                        "name": "可领取（麦麦省）",
-                        "state": q.state,
-                        "note": q.note,
-                        "coupons": [self._coupon_dict(c) for c in q.coupons],
-                    }
-                )
+                try:
+                    q = client.available_coupons()
+                    sections.append(
+                        {
+                            "name": "可领取（麦麦省）",
+                            "state": q.state,
+                            "note": q.note,
+                            "coupons": [self._coupon_dict(c) for c in q.coupons],
+                        }
+                    )
+                except (MCPError, RuntimeError) as e:
+                    sections.append({"name": "可领取（麦麦省）", "state": "error", "note": str(e), "coupons": []})
                 try:
                     mine = client.my_coupons()
                     sections.append(
                         {"name": "我的卡包", "state": "ok", "note": "", "coupons": [self._coupon_dict(c) for c in mine]}
                     )
-                except MCPError as e:
+                except (MCPError, RuntimeError) as e:
                     sections.append({"name": "我的卡包", "state": "error", "note": str(e), "coupons": []})
                 if store_code:
                     try:
@@ -601,7 +607,7 @@ class WebApp:
                                 "coupons": [self._coupon_dict(c) for c in store_items],
                             }
                         )
-                    except MCPError as e:
+                    except (MCPError, RuntimeError) as e:
                         sections.append({"name": f"门店 {store_code} 适用", "state": "error", "note": str(e), "coupons": []})
                 else:
                     sections.append(
@@ -613,8 +619,24 @@ class WebApp:
                         }
                     )
         except MCPError as e:
-            return {"state": "error", "error": str(e), "generated_at": now, "sections": sections}
-        return {"state": "ok", "generated_at": now, "sections": sections}
+            # 连接层失败：把尚未记录的分区补为 error（不覆盖已独立成功的结果）
+            conn_error = str(e)
+            expected = ["可领取（麦麦省）", "我的卡包", f"门店 {store_code} 适用" if store_code else "门店适用"]
+            recorded = {s["name"] for s in sections}
+            for name in expected:
+                if name not in recorded:
+                    sections.append({"name": name, "state": "error", "note": f"连接失败：{conn_error}", "coupons": []})
+        states = [s["state"] for s in sections]
+        if all(s == "error" for s in states):
+            overall = "error"
+        elif any(s == "error" for s in states):
+            overall = "partial"
+        else:
+            overall = "ok"
+        out = {"state": overall, "generated_at": now, "sections": sections}
+        if conn_error:
+            out["error"] = conn_error
+        return out
 
     def meal_detail(self, code: str, store_code: str, reconfigure: Optional[dict] = None) -> dict:
         """套餐装备（POST /api/detail）：真实组成/替换项/特制项 + 单品组合算价。

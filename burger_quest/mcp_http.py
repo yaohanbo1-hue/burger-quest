@@ -794,12 +794,13 @@ class HttpMCPClient(MCPClient):
     # -- 第一阶段扩展（2026-10-18）：活动日历 + 可领券（均只读） --------------
 
     def campaign_calendar(self, specified_date: Optional[str] = None):
-        """campaign-calendar（只读）-> list[Campaign]。
+        """campaign-calendar（只读）-> CampaignParseResult。
 
         官方返回 **Markdown 文本**（非 JSON 信封），已在 PLAIN_TEXT_TOOLS 白名单；
-        解析见 campaign.py。旧价格/活动不会缓存（活动随时更新）。
+        解析见 campaign.py。空列表不等于有效空结果——无法识别结构时返回
+        parse_error，由 CLI/Web 显式提示，而不是显示「暂无活动」。
         """
-        from .campaign import parse_campaign_text
+        from .campaign import parse_campaign_result
 
         args: dict[str, Any] = {}
         if specified_date:
@@ -807,7 +808,7 @@ class HttpMCPClient(MCPClient):
         text = self._call("campaign-calendar", args, purpose="campaign_calendar")
         if not isinstance(text, str):
             text = json.dumps(text, ensure_ascii=False)
-        return parse_campaign_text(text)
+        return parse_campaign_result(text)
 
     def _call_raw(self, tool: str, arguments: dict, timeout: float = 30.0):
         """底层调用：绕过 SDK 的 structured content 校验，返回原始 CallToolResult。
@@ -855,7 +856,8 @@ class HttpMCPClient(MCPClient):
             msg = str(payload.get("message") or "")
             summary = {"success": payload.get("success"), "code": code, "message": msg[:80]}
             if payload.get("success") is False:
-                if code == 499 or "No coupons available" in msg:
+                # 精确匹配已实测的无券响应；code 或 message 任一不符 → 真实业务错误
+                if code == 499 and msg.strip() == "No coupons available":
                     return CouponQuery(
                         state="empty",
                         note="官方明确返回：暂无可领取的优惠券（code=499 No coupons available）",
@@ -873,7 +875,18 @@ class HttpMCPClient(MCPClient):
                     note="官方返回 success=true 但 data=null：无法确认是否有可领取券",
                     raw_summary=summary,
                 )
-            return CouponQuery(state="ok", coupons=adapt_coupons(data, source="available"), raw_summary=summary)
+            if not isinstance(data, list):
+                raise MCPError(
+                    "available-coupons",
+                    f"响应契约错误：data 类型为 {type(data).__name__}，官方声明为 array",
+                )
+            coupons = adapt_coupons(data, source="available")
+            if data and not coupons:
+                raise MCPError(
+                    "available-coupons",
+                    "响应契约错误：券条目缺少 couponId/名称等必需字段，无法解析",
+                )
+            return CouponQuery(state="ok", coupons=coupons, raw_summary=summary)
 
         # 无 structuredContent：退回文本判定（官方 content 为 Markdown）
         text = ""
@@ -882,7 +895,8 @@ class HttpMCPClient(MCPClient):
             if chunk:
                 text += chunk
         summary = {"structured": False, "text_head": text[:60].replace("\n", " ")}
-        if "暂无可领取" in text or "暂无" in text:
+        # 只用实测的精确文案判定空态；任何「含暂无」的泛化匹配都可能把别的提示误判成无券
+        if "暂无可领取的优惠券" in text:
             return CouponQuery(state="empty", note="官方文本明示：暂无可领取的优惠券", raw_summary=summary)
         return CouponQuery(
             state="unknown",

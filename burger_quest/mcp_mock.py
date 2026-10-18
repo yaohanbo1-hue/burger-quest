@@ -172,23 +172,27 @@ class MockMCPClient(MCPClient):
     # -- 第一阶段扩展（2026-10-18）：演示数据，明确标注「演示」，绝不冒充真实活动 --
 
     def campaign_calendar(self, specified_date: Optional[str] = None):
+        from .campaign import CampaignParseResult
         from .models import Campaign
 
         self._record("campaign-calendar", {"specifiedDate": specified_date or ""}, True)
-        return [
-            Campaign(
-                date="2026-10-18",
-                title="【演示】9.9 元早餐两件套（演示数据，非官方实时活动）",
-                content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
-                status="live",
-            ),
-            Campaign(
-                date="2026-10-19",
-                title="【演示】韩式风味新品（演示数据，非官方实时活动）",
-                content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
-                status="upcoming",
-            ),
-        ]
+        return CampaignParseResult(
+            state="ok",
+            campaigns=[
+                Campaign(
+                    date="2026-10-18",
+                    title="【演示】9.9 元早餐两件套（演示数据，非官方实时活动）",
+                    content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
+                    status="live",
+                ),
+                Campaign(
+                    date="2026-10-19",
+                    title="【演示】韩式风味新品（演示数据，非官方实时活动）",
+                    content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
+                    status="upcoming",
+                ),
+            ],
+        )
 
     def available_coupons(self):
         from .models import CouponQuery

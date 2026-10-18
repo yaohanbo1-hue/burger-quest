@@ -388,7 +388,7 @@ def _cmd_campaign(args) -> int:
     try:
         with client:
             try:
-                items = client.campaign_calendar(args.date)
+                parsed = client.campaign_calendar(args.date)
             except MCPError as e:
                 print(f"❌ 活动日历不可用：{e}")
                 print("   降级说明：无法获取官方活动，本次不展示任何活动（不编造）。")
@@ -397,10 +397,17 @@ def _cmd_campaign(args) -> int:
         print(f"❌ {e}")
         return 2
 
-    if not items:
-        print(f"ℹ️ 官方活动日历未返回活动（来源：{source_note}）。")
-        print("   可能是当月暂无活动或接口字段变化；可用 --date yyyy-MM-dd 指定基准日重试。")
+    items = parsed.campaigns
+    if parsed.state == "parse_error":
+        print(f"⚠️ 活动解析失败：{parsed.reason}")
+        print("   无法确认活动列表是否完整；仅展示已识别条目（不补造）。")
+        if not items:
+            return 1
+    elif parsed.state == "empty":
+        print(f"ℹ️ 官方明确：当前没有活动（来源：{source_note}）。")
         return 0
+    elif parsed.reason:
+        print(f"ℹ️ 说明：{parsed.reason}")
 
     counts = campaign_mod.summarize(items)
     print(f"🍟 麦门限时委托 · 来源：{source_note}")

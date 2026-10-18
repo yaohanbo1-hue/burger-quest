@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .models import Campaign
@@ -35,6 +36,8 @@ _TITLE_RE = re.compile(r"^\s*-\s*\*\*活动标题\*\*\s*[：:]\s*(.+?)\s*$")
 _CONTENT_RE = re.compile(r"^\s*\*\*活动内容介绍\*\*\s*[：:]\s*(.*)$")
 _IMAGE_RE = re.compile(r"^\s*\*\*活动图片介绍\*\*\s*[：:]?\s*$")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
+# 「官方明示无活动」的精确措辞（不是泛化的「暂无」——后者可能出现在别处）
+_EMPTY_HINTS = ("暂无活动", "无活动", "没有活动", "暂无任何活动")
 
 
 def parse_campaign_text(text: str, today: Optional[_dt.date] = None) -> list[Campaign]:
@@ -117,6 +120,49 @@ def parse_campaign_text(text: str, today: Optional[_dt.date] = None) -> list[Cam
 
     flush()
     return campaigns
+
+
+@dataclass(frozen=True)
+class CampaignParseResult:
+    """活动文本解析结果：显式区分「有效空」与「无法识别」。
+
+    state:
+      ok         — 识别到官方结构且有活动（可附带 reason 说明未识别条目）
+      empty      — 识别到官方结构、无活动，且文本明确表示没有活动
+      parse_error— 无法确认活动列表是否完整（无结构标志/结构在但解析不出活动）
+    注意：**不能**把 parse_campaign_text() 返回空列表直接当成有效空结果。
+    """
+
+    state: str
+    campaigns: list[Campaign] = field(default_factory=list)
+    reason: str = ""
+
+
+def parse_campaign_result(text: str, today: Optional[_dt.date] = None) -> CampaignParseResult:
+    """解析官方 Markdown，并给出显式状态（ok / empty / parse_error）。"""
+    raw = text or ""
+    campaigns = parse_campaign_text(raw, today)
+
+    has_structure = bool(_DATE_RE.search(raw) or "活动列表" in raw)
+    if not has_structure:
+        return CampaignParseResult(
+            state="parse_error",
+            campaigns=campaigns,
+            reason="未检测到官方活动结构（无日期段、也无「活动列表」标题）",
+        )
+    if campaigns:
+        reason = ""
+        declared = raw.count("**活动标题**")
+        if declared > len(campaigns):
+            reason = f"{declared - len(campaigns)} 条活动标题未能解析（可能格式变化），仅保留已识别条目"
+        return CampaignParseResult(state="ok", campaigns=campaigns, reason=reason)
+    if any(h in raw for h in _EMPTY_HINTS):
+        return CampaignParseResult(state="empty", campaigns=[], reason="官方明示：当前没有活动")
+    return CampaignParseResult(
+        state="parse_error",
+        campaigns=[],
+        reason="检测到活动结构但未解析出任何活动（可能官方格式已变化），无法确认列表是否完整",
+    )
 
 
 def summarize(campaigns: list[Campaign]) -> dict:

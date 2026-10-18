@@ -308,7 +308,7 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 
 ### 4.6 安全与隐私边界（Web 界面）
 
-**工具箱（Web，只读）**：页面「工具箱」面板提供三个入口——麦门限时委托（官方活动日历，进行中/未来/往期分开）、优惠券猎人（可领取/我的卡包/门店适用三类分开，未知状态不会显示成 0 张）、套餐装备（真实组成/可替换项/特制项；明确标注「不提供套餐改价」）。接口：`GET /api/campaign`、`GET /api/coupons?store_code=`、`POST /api/detail`。接口能力与阻塞项见 [API_CAPABILITY_AUDIT.md](API_CAPABILITY_AUDIT.md)。
+**工具箱（Web，只读）**：页面「工具箱」面板提供三个入口——麦门限时委托（官方活动日历，进行中/未来/往期分开）、优惠券猎人（可领取/我的卡包/门店适用三类分开，未知状态不会显示成 0 张）、套餐装备（真实组成/可替换项/特制项；明确标注「不提供套餐改价」）。接口：`GET /api/campaign`、`GET /api/coupons?store_code=`、`POST /api/detail`。状态语义见 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) 末节（活动 `ok/empty/parse_error/error`；券分区 `ok/empty/unknown/skipped/error`，部分失败为 `partial`，失败分区不会显示为 0 张）。接口能力与阻塞项见 [API_CAPABILITY_AUDIT.md](API_CAPABILITY_AUDIT.md)。
 
 本地 Web 界面在 `127.0.0.1:8787` 开HTTP 服务。**浏览器里任意一个网页都能对本机端口发请求**——CORS 只阻止读取响应，阻止不了请求发出。所以有两道防线（2026-10-17 安全审计补齐）：
 
