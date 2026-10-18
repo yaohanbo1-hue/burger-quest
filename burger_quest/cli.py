@@ -227,6 +227,329 @@ def _cmd_stores(args) -> int:
     return 0
 
 
+def _cmd_detail(args) -> int:
+    """套餐装备：展示官方返回的套餐组成/可替换项/特制选项；可按单品组合重配算价。
+
+    边界：官方 calculate-price 未公开「套餐替换」参数，本命令**不做套餐改价**；
+    --reconfigure 是把套餐内默认项当单品组合提交官方算价，与套餐价可能不同。
+    """
+    from . import mealconfig
+    from .mcp_base import scene_for_mode
+    from .models import MenuItem, PlanItem
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    client: MCPClient
+    if args.demo:
+        from .mcp_mock import MockMCPClient
+
+        client = MockMCPClient()
+        source = "演示数据（MockMCPClient，非实时）"
+    else:
+        from .mcp_http import HttpMCPClient
+
+        client = HttpMCPClient()
+        source = "麦当劳官方 MCP（实时）"
+
+    replacements: dict[int, str] = {}
+    if args.reconfigure:
+        for pair in args.reconfigure.split(","):
+            if not pair.strip():
+                continue
+            if "=" not in pair:
+                print(f"❌ --reconfigure 格式错误：{pair!r}（应为 组序号=选项编码）")
+                return 2
+            gid, code = pair.split("=", 1)
+            try:
+                replacements[int(gid.strip())] = code.strip()
+            except ValueError:
+                print(f"❌ --reconfigure 组序号不是整数：{gid!r}")
+                return 2
+
+    try:
+        with client:
+            scene = scene_for_mode("takeaway", args.store_code)
+            detail = client.meal_detail(scene, args.code)
+            groups = mealconfig.parse_detail(detail)
+            if not groups:
+                print(f"ℹ️ 餐品 {args.code} 未返回套餐组成（可能是单品，或官方结构变化）。")
+                print(f"   名称：{detail.get('name') or '（官方未返回）'}  来源：{source}")
+                return 0
+
+            print(f"🍔 套餐装备 · {detail.get('name') or '（官方未返回名称）'}（{args.code}）")
+            print(f"   门店 {args.store_code} · 生成于 {now} · 来源：{source}")
+            print("   说明：以下组成/可替换项/特制选项均来自官方 query-meal-detail 返回\n")
+
+            print("【套餐组成】")
+            for g in groups:
+                print(f" {g.index}. {g.name} ×{g.quantity}")
+                for c in g.choices:
+                    mark = "（默认）" if c.is_default else ""
+                    diff = f"，{c.diff_text}" if c.diff_text else ""
+                    mod = "，可替换" if c.modifiable else ""
+                    print(f"    · {c.name}（{c.code}）{mark}{diff}{mod}")
+                    for item in c.modifications:
+                        names = " / ".join(
+                            f"{v['name']}{'（已选）' if v.get('selected_quantity') else ''}"
+                            for v in item.get("values") or []
+                        )
+                        if names:
+                            print(f"        特制选项（仅展示，不参与算价）：{names}")
+            print()
+
+            # 套餐参考价（官方算价）
+            combo_quote = client.calculate_price(
+                scene, [PlanItem(MenuItem(code=args.code, name=detail.get("name") or "", category=""), 1)], [],
+                purpose="meal_detail_combo_price",
+            )
+            if combo_quote.ok and combo_quote.total_cents is not None:
+                print(f"【套餐参考价】应付 {format_yuan(combo_quote.total_cents)}（calculate-price 权威结果）")
+            else:
+                print("【套餐参考价】官方算价未返回可用总价 —— 明确失败，不估算。")
+
+            if replacements:
+                items, notes = mealconfig.apply_replacements(groups, replacements)
+                print("\n【重配（按单品组合）】")
+                for n in notes:
+                    print(f"  · {n}")
+                if not items:
+                    print("  ⚠️ 重配后没有可用单品，未发起算价。")
+                    return 1
+                plan_items = [
+                    PlanItem(MenuItem(code=code, name=name, category=""), qty) for code, name, qty in items
+                ]
+                quote = client.calculate_price(scene, plan_items, [], purpose="meal_reconfigure_price")
+                combo_desc = " + ".join(f"{name}×{qty}" for _code, name, qty in items)
+                print(f"  单品组合：{combo_desc}")
+                if quote.ok and quote.total_cents is not None:
+                    print(f"  官方算价：应付 {format_yuan(quote.total_cents)}（calculate-price 权威结果）")
+                    print(
+                        "  ⚠️ 说明：官方算价接口未公开「套餐替换」参数，本价格是**单品组合**的官方报价，"
+                        "不是套餐改价；两者可能不同，请以官方点餐页最终价为准。"
+                    )
+                else:
+                    print(f"  ❌ 官方算价未返回可用总价：{quote.message or '未知原因'}（不估算、不用旧价冒充）")
+                    return 1
+    except MCPError as e:
+        print(f"❌ {e}")
+        return 2
+
+    if args.json:
+        payload = {
+            "generated_at": now,
+            "source": source,
+            "code": args.code,
+            "name": detail.get("name"),
+            "store_code": args.store_code,
+            "groups": [
+                {
+                    "index": g.index,
+                    "name": g.name,
+                    "quantity": g.quantity,
+                    "choices": [
+                        {
+                            "code": c.code,
+                            "name": c.name,
+                            "is_default": c.is_default,
+                            "diff_text": c.diff_text,
+                            "modifiable": c.modifiable,
+                            "modifications": c.modifications,
+                        }
+                        for c in g.choices
+                    ],
+                }
+                for g in groups
+            ],
+            "combo_price_ok": combo_quote.ok,
+            "combo_price_cents": combo_quote.total_cents,
+            "reconfigure": args.reconfigure,
+        }
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"\nJSON 已写入：{args.json}")
+    return 0
+
+
+def _cmd_campaign(args) -> int:
+    """麦门限时委托：只读查询官方活动日历（不报名、不预约、不领奖）。"""
+    from . import campaign as campaign_mod
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    client: MCPClient
+    if args.demo:
+        from .mcp_mock import MockMCPClient
+
+        client = MockMCPClient()
+        source_note = "演示数据（MockMCPClient，非实时活动）"
+    else:
+        from .mcp_http import HttpMCPClient
+
+        client = HttpMCPClient()
+        source_note = "麦当劳官方 campaign-calendar（实时）"
+
+    try:
+        with client:
+            try:
+                items = client.campaign_calendar(args.date)
+            except MCPError as e:
+                print(f"❌ 活动日历不可用：{e}")
+                print("   降级说明：无法获取官方活动，本次不展示任何活动（不编造）。")
+                return 2
+    except MCPError as e:
+        print(f"❌ {e}")
+        return 2
+
+    if not items:
+        print(f"ℹ️ 官方活动日历未返回活动（来源：{source_note}）。")
+        print("   可能是当月暂无活动或接口字段变化；可用 --date yyyy-MM-dd 指定基准日重试。")
+        return 0
+
+    counts = campaign_mod.summarize(items)
+    print(f"🍟 麦门限时委托 · 来源：{source_note}")
+    print(f"   生成时间 {now} · 进行中 {counts['live']} · 未来 {counts['upcoming']} · 往期 {counts['past']}")
+    print("   说明：查看活动 ≠ 参加活动；第一阶段不报名、不预约、不创建订单、不领取奖励。\n")
+
+    for label, key in (("进行中", "live"), ("未来", "upcoming"), ("往期", "past")):
+        subset = [c for c in items if c.status == key]
+        if not subset:
+            continue
+        print(f"【{label}】")
+        for c in subset:
+            print(f"  · {c.date}  {c.title}")
+            if c.content:
+                first = c.content.splitlines()[0].strip()
+                if first:
+                    print(f"    {first[:80]}")
+        print()
+
+    if args.json:
+        payload = {
+            "generated_at": now,
+            "source": "campaign-calendar",
+            "source_note": source_note,
+            "readonly": True,
+            "counts": counts,
+            "campaigns": [
+                {
+                    "date": c.date,
+                    "title": c.title,
+                    "content": c.content,
+                    "image_url": c.image_url,
+                    "status": c.status,
+                }
+                for c in items
+            ],
+        }
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"JSON 已写入：{args.json}")
+    return 0
+
+
+def _cmd_coupons(args) -> int:
+    """优惠券猎人：三类券分开查询展示（全部只读，不领取）。"""
+    from .mcp_base import scene_for_mode
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    client: MCPClient
+    if args.demo:
+        from .mcp_mock import MockMCPClient
+
+        client = MockMCPClient()
+        source_note = "演示数据（MockMCPClient，非实时）"
+    else:
+        from .mcp_http import HttpMCPClient
+
+        client = HttpMCPClient()
+        source_note = "麦当劳官方 MCP（实时）"
+
+    sections: list[dict] = []
+    try:
+        with client:
+            # A. 可领取（available-coupons）——只查不领
+            try:
+                available = client.available_coupons()
+                sections.append({"name": "可领取（麦麦省）", "state": "ok", "items": available, "note": ""})
+            except MCPError as e:
+                sections.append({"name": "可领取（麦麦省）", "state": "unknown", "items": [], "note": str(e)})
+
+            # B. 我的卡包
+            try:
+                mine = client.my_coupons()
+                sections.append({"name": "我的卡包", "state": "ok", "items": mine, "note": ""})
+            except MCPError as e:
+                sections.append({"name": "我的卡包", "state": "unknown", "items": [], "note": str(e)})
+
+            # C. 门店适用（可选，需门店编码）
+            if args.store_code:
+                try:
+                    store_items = client.store_coupons(scene_for_mode("takeaway", args.store_code))
+                    sections.append({"name": f"门店 {args.store_code} 适用", "state": "ok", "items": store_items, "note": ""})
+                except MCPError as e:
+                    sections.append({"name": f"门店 {args.store_code} 适用", "state": "unknown", "items": [], "note": str(e)})
+            else:
+                sections.append({
+                    "name": "门店适用",
+                    "state": "skipped",
+                    "items": [],
+                    "note": "未提供 --store-code，未查询（避免误把「卡包券」当成「该门店可用券」）",
+                })
+    except MCPError as e:
+        print(f"❌ {e}")
+        return 2
+
+    print(f"🎟️ 优惠券猎人 · 来源：{source_note}")
+    print(f"   生成时间 {now} · 全部只读：不领取、不绑定、不修改账户\n")
+
+    for s in sections:
+        print(f"【{s['name']}】")
+        if s["state"] == "unknown":
+            print(f"  ⚠️ 状态未知：{s['note'][:160]}")
+        elif s["state"] == "skipped":
+            print(f"  ℹ️ {s['note']}")
+        elif not s["items"]:
+            print("  （官方返回为空——不排除有券，只是本次查询未返回）")
+        else:
+            for c in s["items"]:
+                bits = [c.name or c.id]
+                if c.threshold_cents:
+                    bits.append(f"门槛 ¥{c.threshold_cents / 100:.2f}")
+                # 有效期字段官方未在所有券种返回：缺失时明确标「未知」，不猜
+                expires = c.raw.get("expiresAt") or c.raw.get("expireTime") or c.raw.get("validEndTime")
+                bits.append(f"有效期至 {expires}" if expires else "有效期未知")
+                print("  · " + " · ".join(bits))
+        print()
+
+    if args.json:
+        payload = {
+            "generated_at": now,
+            "source": "available-coupons / query-my-coupons / query-store-coupons",
+            "source_note": source_note,
+            "readonly": True,
+            "store_code": args.store_code,
+            "sections": [
+                {
+                    "name": s["name"],
+                    "state": s["state"],
+                    "note": s["note"],
+                    "coupons": [
+                        {
+                            "id": c.id,
+                            "name": c.name,
+                            "threshold_cents": c.threshold_cents,
+                            "value_cents": c.value_cents,
+                            "percent": c.percent,
+                            "expires_at": c.raw.get("expiresAt") or c.raw.get("expireTime") or c.raw.get("validEndTime"),
+                            "source": c.source,
+                        }
+                        for c in s["items"]
+                    ],
+                }
+                for s in sections
+            ],
+        }
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"JSON 已写入：{args.json}")
+    return 0
+
+
 def _resolve_progress_path(args) -> str:
     """解析 --progress：裸旗标读环境变量；返回空 = 不启用（默认不写文件）。"""
     value = getattr(args, "progress", None)
@@ -463,6 +786,58 @@ def main(argv=None) -> int:
     )
     p_doctor.add_argument("--json", default=None, help="诊断结果 JSON 输出路径（不含任何敏感值）")
 
+    p_detail = sub.add_parser(
+        "detail",
+        help="套餐装备：查看官方返回的套餐组成/可替换项（只读）；--reconfigure 按单品组合重算价",
+        description=(
+            "查看套餐真实组成、可替换项与特制选项（query-meal-detail，只读）。\n"
+            "- 组成/选项/差价全部来自官方返回，不派生未返回的选项；\n"
+            "- 特制选项（去冰/加酱等）仅展示：官方算价接口未公开替换参数，不伪造改价；\n"
+            "- --reconfigure 把套餐默认项当「单品组合」提交 calculate-price，得到官方单品报价\n"
+            "  （与套餐价可能不同，输出会明确标注）。\n"
+            "退出码：0=成功；1=算价失败；2=配置/参数错误。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_detail.add_argument("code", help="餐品编码（套餐或单品）")
+    p_detail.add_argument("--store-code", required=True, help="门店编码（详情查询需要门店上下文）")
+    p_detail.add_argument("--reconfigure", default=None, help='替换项，如 "4=3071"（组序号=选项编码，逗号分隔）')
+    p_detail.add_argument("--json", default=None, help="结果 JSON 输出路径")
+    p_detail.add_argument("--demo", action="store_true", help="离线演示（明确标注演示数据）")
+
+    p_campaign = sub.add_parser(
+        "campaign",
+        help="麦门限时委托：查询官方活动日历（只读；不报名、不领奖）",
+        description=(
+            "查询麦当劳中国当月营销活动日历（campaign-calendar，只读）。\n"
+            "- 展示官方返回的活动名称、日期、状态（进行中/未来/往期）与来源；\n"
+            "- 只读：不报名、不预约、不创建订单、不领取任何奖励；\n"
+            "- 时间或活动接口不可用时明确降级，不编造活动。\n"
+            "退出码：0=成功；2=配置/连接错误（如缺 Token）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_campaign.add_argument("--date", default=None, help="基准日期 yyyy-MM-dd（官方返回该日前后各一个有活动的日子）")
+    p_campaign.add_argument("--json", default=None, help="结果 JSON 输出路径")
+    p_campaign.add_argument("--demo", action="store_true", help="离线演示（结果明确标注为演示数据）")
+
+    p_coupons = sub.add_parser(
+        "coupons",
+        help="优惠券猎人：三类券分开查询展示（可领取 / 我的卡包 / 门店适用；只读，不领取）",
+        description=(
+            "优惠券猎人（全部只读）：\n"
+            "- available-coupons：当前可领取的麦麦省券（**不领取**，不调用 auto-bind-coupons）；\n"
+            "- query-my-coupons：我的卡包券；\n"
+            "- query-store-coupons：指定门店适用券（需 --store-code）；\n"
+            "- 三类状态分开标注，绝不混为一谈；字段缺失时明确「未知」。\n"
+            "退出码：0=成功；2=配置/连接错误（如缺 Token）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_coupons.add_argument("--store-code", default=None, help="门店编码（查询该门店适用券时需要）")
+    p_coupons.add_argument("--json", default=None, help="结果 JSON 输出路径")
+    p_coupons.add_argument("--demo", action="store_true", help="离线演示（结果明确标注为演示数据）")
+
     sub.add_parser("tools", help="列出引擎实际调用的 MCP 工具")
 
     args = parser.parse_args(argv)
@@ -488,6 +863,15 @@ def main(argv=None) -> int:
 
     if args.cmd == "stores":
         return _cmd_stores(args)
+
+    if args.cmd == "campaign":
+        return _cmd_campaign(args)
+
+    if args.cmd == "detail":
+        return _cmd_detail(args)
+
+    if args.cmd == "coupons":
+        return _cmd_coupons(args)
 
     if args.cmd == "smoke":
         from . import smoke

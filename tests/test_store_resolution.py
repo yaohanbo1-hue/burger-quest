@@ -88,6 +88,13 @@ class StubLiveClient(MCPClient):
     def my_coupons(self):
         return []
 
+    # 2026-10-18 新增抽象方法：本桩只测门店解析，两个扩展工具返回空（不参与断言）
+    def campaign_calendar(self, specified_date=None):
+        return []
+
+    def available_coupons(self):
+        return []
+
     def list_nutrition_foods(self):
         return []
 

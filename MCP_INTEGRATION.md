@@ -17,12 +17,12 @@
 | 服务范围 | 中国大陆地区（不含港澳台） |
 | 官方文档 | <https://github.com/M-China/mcd-mcp-server> |
 
-## 2. 实际使用的工具（8 个核心 + 2 个外送场景专用）
+## 2. 实际使用的工具（7 常规主链路 + 1 详情回退 + 2 扩展只读 + 2 外送专用）
 
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。
-**场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 8 个）：
+**场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 10 个；`TOOLS_RESERVED` 另有 10 个，含外送 2 个与写操作/抽奖 8 个）：
 
-- **8 个核心工具**（`TOOLS_USED`）：项目在用的只读工具全集，但**并非每个任务都会用到全部 8 个**——其中 6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`，外送门店改由 `delivery-query-stores` 提供）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
+- **10 个在用只读工具**（`TOOLS_USED`）：7 个常规主链路 + 1 个详情回退 + 2 个第一阶段扩展（`campaign-calendar` / `available-coupons`，只在对应功能里调用）。常规主链路**并非每个任务都会用到全部**——6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`，外送门店改由 `delivery-query-stores` 提供）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
 - **2 个外送专用工具**（`delivery-query-addresses` / `delivery-query-stores`，登记在 `TOOLS_RESERVED`）：仅外送场景使用，且需要账户已保存配送地址；账户无保存地址时该链路**未验证（BLOCKED）**，程序按诚实失败处理。
 
 | 工具 | 用途 | 在调用链中的位置 |
@@ -170,8 +170,8 @@
 
 ### 工具发现（`list_tools` 实测，35 个工具）
 
-官方清单共 **35 个工具**；项目 `TOOLS_USED`（8 个）与 `TOOLS_RESERVED`（8 个）全部在列。
-本次逐个核对了 8 个在用工具的官方输入 Schema，与 `mcp_http.py` 实际传参**完全一致**
+官方清单共 **35 个工具**；项目 `TOOLS_USED`（10 个）与 `TOOLS_RESERVED`（10 个）全部在列。
+本次逐个核对了 10 个在用工具的官方输入 Schema，与 `mcp_http.py` 实际传参**完全一致**
 （含 `query-meal-detail` 的编码参数名是 `code`、`calculate-price` 的
 `items[].productCode/quantity/couponId`、`query-nearby-stores` 的 `beType+searchType` 组合）。
 另发现官方 Schema 明确约定：**到店自提场景（orderType=1）传 beCode 会报错**——
@@ -302,7 +302,7 @@ code=600010  使用优惠券需要couponId和couponCode
 | --- | --- | --- |
 | L1 服务可访问 | ✅ PASS | 未认证 POST `https://mcp.mcd.cn` → HTTP 403，TCP+TLS 1.4s 完成（服务可达 + 认证层正常；403 是网关对无 Token 请求的预期响应） |
 | L2 认证成功 | ✅ PASS | doctor：Streamable HTTP 会话建立，Bearer Token 通过认证 |
-| L3 工具发现成功 | ✅ PASS | `list_tools` 35 个工具，项目依赖的 8 个全部在位（SDK 2.3.0） |
+| L3 工具发现成功 | ✅ PASS | `list_tools` 35 个工具，项目依赖的 10 个全部在位（SDK 2.3.0） |
 | L4 单工具真实调用成功 | ✅ PASS | `now-time-info` 返回服务器时间 2026-10-17T15:44:45 |
 | L5 业务流程真实跑通 | ✅ PASS | `quest "我想吃辣，预算35…" --store-code 1420762`：114 个菜单编码 → 价格发现（0 次详情）→ 组合验价 → 龙焰鸡腿堡 ¥24.00（calculate-price 权威）/ 预算 ¥35 剩 ¥11；8 次调用 2.5s；分享卡正常生成 |
 
@@ -360,7 +360,7 @@ code=600010  使用优惠券需要couponId和couponCode
 `skill.md`（WorkBuddy 技能入口）与仓库代码保持同步，由 `tests/test_skill_docs.py` 自动校验：
 
 - 文档中提到的每个 MCP 工具名都必须在 `TOOLS_USED` / `TOOLS_RESERVED` 真实清单内（防虚构工具名）；
-- 引擎使用的 8 个工具 + 外送 2 个工具都必须在文档中说明；
+- 引擎使用的 10 个工具 + 外送 2 个工具都必须在文档中说明；
 - 必备章节（角色定位/前置检查/解析/调用链/规划/输出/卡片/错误处理/红线/对话示例）齐全；
 - 文档声称的解析规则与 `nlparser` 实际行为一致（10 条抽查）；
 - 文档中三个数值示例与引擎实际输出一致（示例可执行、不编数字）；

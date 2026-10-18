@@ -82,6 +82,12 @@ class MockMCPClient(MCPClient):
         self._record("list_tools", {}, True)
         return [{"name": t, "description": "（演示数据，非官方 Schema）", "input_schema": None} for t in TOOLS_USED]
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
     def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1):
         """演示用附近门店查询（searchType=2 按位置）。
 
@@ -162,6 +168,31 @@ class MockMCPClient(MCPClient):
         if not self.data.get("my_coupons"):
             return []
         return adapt_coupons(self.data.get("my_coupons", []), source="my")
+
+    # -- 第一阶段扩展（2026-10-18）：演示数据，明确标注「演示」，绝不冒充真实活动 --
+
+    def campaign_calendar(self, specified_date: Optional[str] = None):
+        from .models import Campaign
+
+        self._record("campaign-calendar", {"specifiedDate": specified_date or ""}, True)
+        return [
+            Campaign(
+                date="2026-10-18",
+                title="【演示】9.9 元早餐两件套（演示数据，非官方实时活动）",
+                content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
+                status="live",
+            ),
+            Campaign(
+                date="2026-10-19",
+                title="【演示】韩式风味新品（演示数据，非官方实时活动）",
+                content="离线演示用活动条目：真实活动请以 campaign-calendar 官方返回为准。",
+                status="upcoming",
+            ),
+        ]
+
+    def available_coupons(self):
+        self._record("available-coupons", {}, True)
+        return adapt_coupons(self.data.get("available_coupons", []), source="available")
 
     def list_nutrition_foods(self):
         self._record("list-nutrition-foods", {}, True)

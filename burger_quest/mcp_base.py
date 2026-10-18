@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .models import (
+    Campaign,
     Coupon,
     MenuItem,
     NutritionItem,
@@ -58,7 +59,15 @@ from .models import (
     yuan_to_cents,
 )
 
-# 引擎实际调用的麦当劳 MCP 工具（MVP 最小集）
+# 引擎实际调用的麦当劳 MCP 工具。
+# 计数口径（2026-10-18 统一，文档与代码必须一致）：
+#   7 个常规主链路：now-time-info / query-nearby-stores / query-meals /
+#                   query-store-coupons / query-my-coupons /
+#                   list-nutrition-foods / calculate-price
+#   1 个餐品详情回退：query-meal-detail（名称价格默认来自算价 productList）
+#   2 个外送专用：delivery-query-addresses / delivery-query-stores
+#   2 个第一阶段扩展（只读）：campaign-calendar / available-coupons
+# 合计 12 个可用工具；TOOLS_RESERVED 中的写操作/抽奖工具一律不主动调用。
 TOOLS_USED = [
     "now-time-info",
     "query-nearby-stores",
@@ -68,13 +77,14 @@ TOOLS_USED = [
     "query-my-coupons",
     "list-nutrition-foods",
     "calculate-price",
+    "campaign-calendar",
+    "available-coupons",
 ]
 # 预留但 MVP 不主动调用的工具（写进文档说明边界）
 TOOLS_RESERVED = [
     "delivery-query-addresses",
     "delivery-query-stores",
     "delivery-create-address",
-    "available-coupons",
     "auto-bind-coupons",
     "create-order",
     "cancel-order",
@@ -96,6 +106,8 @@ TOOL_PURPOSE = {
     "query-my-coupons": "coupon_pool",
     "list-nutrition-foods": "nutrition",
     "calculate-price": "price_check",
+    "campaign-calendar": "campaign_calendar",
+    "available-coupons": "coupon_pool",
     "list_tools": "tool_discovery",
 }
 
@@ -298,6 +310,22 @@ class MCPClient(ABC):
     @abstractmethod
     def nearby_stores(self, keyword: str, city: str = "", be_type: int = 1) -> list[Store]:
         """query-nearby-stores（searchType=2 按位置）-> 附近门店列表"""
+
+    @abstractmethod
+    def campaign_calendar(self, specified_date: Optional[str] = None) -> list[Campaign]:
+        """campaign-calendar（只读）-> 官方活动日历。
+
+        官方返回 Markdown 文本（非 JSON 信封）；解析见 campaign.py。
+        specified_date：yyyy-MM-dd，可选；传入时官方返回该日前后各一个有活动的日子。
+        仅展示官方活动，不派生奖品/优惠金额/资格。
+        """
+
+    @abstractmethod
+    def available_coupons(self) -> list[Coupon]:
+        """available-coupons（只读）-> 当前可领取的麦麦省优惠券。
+
+        第一阶段只查询展示，**绝不调用 auto-bind-coupons、绝不领取**。
+        """
 
     @abstractmethod
     def delivery_addresses(self) -> list[dict]:

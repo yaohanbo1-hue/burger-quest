@@ -60,6 +60,13 @@ CONTRACT_STATUS = {
     "calculate-price": {"real": "quest 实测 ¥15.90/¥24.00 权威价；600010 双字段契约实测"},
     "delivery-query-addresses": {"real": "quest 外送路径实测调用成功，返回空（账户无保存地址）"},
     "delivery-query-stores": {"real": None, "blocked": "账户无保存地址，无法走到可配送门店查询"},
+    # 2026-10-18 第一阶段新增（只读）
+    "campaign-calendar": {"real": "2026-10-18 实测返回 2026-10 月 14 个日期段 / 28 条活动（Markdown 文本）"},
+    "available-coupons": {
+        "real": None,
+        "blocked": "2026-10-18 实测官方返回 data=null（声明为 array），MCP SDK structured content 校验失败；"
+                   "账户无可领券或官方结构异常，无法确认真实有券时的返回",
+    },
 }
 
 

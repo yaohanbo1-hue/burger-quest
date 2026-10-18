@@ -51,8 +51,11 @@ def _raw_text_client(text: str, tool: str = "query-meals"):
 
 
 def test_plain_text_allowlist_is_exactly_the_documented_tools():
-    """白名单必须且只能包含联调实测的两个空态纯文本工具（防误扩）。"""
-    assert PLAIN_TEXT_TOOLS == {"query-my-coupons", "delivery-query-addresses"}
+    """白名单必须且只能包含联调实测的纯文本返回工具（防误扩）。
+
+    campaign-calendar 于 2026-10-18 实测返回 Markdown 文本（非 JSON 信封）。
+    """
+    assert PLAIN_TEXT_TOOLS == {"query-my-coupons", "delivery-query-addresses", "campaign-calendar"}
 
 
 @pytest.mark.parametrize("tool", ["query-meals", "query-nearby-stores", "calculate-price", "now-time-info"])

@@ -72,12 +72,13 @@ description: 麦门异世界 Burger Quest —— 基于麦当劳中国官方 MCP
      - **多家** → **列出全部候选门店（名称 + 编码）请用户选择**，不得自行选择；
    - **没有位置信息** → 明确要求补充（地址或门店编码），不得假设门店。
 3. **`query-meals(storeCode, orderType, beType[, beCode])`** —— 菜单骨架。**注意：官方只返回编码/分类/标签，没有名称和价格**；失败 → 明确告知并停止。
-4. **价格发现（一次调用同时拿名称 + 单价）**：对短名单商品（每分类 Top3、共 ≤10）发一次 **`calculate-price`**（各 1 件，不带券），从返回 `productList` 取 `productName`（名称）与 `subtotal`（单价，**单位：分**，如 2250=¥22.50）。
-   - `productList` 没给名称的商品，才回退逐个 **`query-meal-detail(storeCode, orderType, beType, code)`** 补名称（餐品编码参数名是 `code`）；全部失败 → 停止（不编造餐品名）。
-5. **优惠券（尽力而为，失败不阻塞）**：`query-store-coupons(storeCode, orderType, beType)` + `query-my-coupons()`。失败 → 按无券方案计算并说明。
-   - **不得**调用 `available-coupons` / `auto-bind-coupons`（领券会改变用户账户状态）。
-6. **营养（尽力而为）**：`list-nutrition-foods`（无参数；返回自定义文本 `[N]{productName,...,energyKcal,...}:` + CSV 行，按表头解析）。失败 → 不展示营养信息。
-7. **组合验价**：每个候选组合走 **`calculate-price`**（`items[].productCode/quantity`；用券时券挂在商品上，且 `items[].couponId` 与 `items[].couponCode` **必须成对提交**，只传 ID 官方会返回 600010）得到权威应付总价。
+4. **价格发现（一次调用同时拿名称 + 单价）**：对短名单商品（类别配额：主食 10 + 小食 2 + 饮品 2）发一次 **`calculate-price`**（各 1 件，不带券），从返回 `productList` 取 `productName`（名称）与 `subtotal`（单价，**单位：分**，如 2250=¥22.50）。
+   - `productList` 没给名称的商品，才回退逐个 **`query-meal-detail(storeCode, orderType, beType, code)`** 补名称（餐品编码参数名是 `code`），同时可展示真实套餐组成/可替换项；全部失败 → 停止（不编造餐品名）。
+5. **优惠券（尽力而为，失败不阻塞）**：`query-store-coupons(storeCode, orderType, beType)` + `query-my-coupons()` + **`available-coupons()`（只读查询可领取券）**。失败 → 按无券方案计算并说明。
+   - **绝不调用 `auto-bind-coupons`**（领取会改变用户账户状态）；`available-coupons` 只查询展示，三类券（可领取/卡包/门店适用）分开标注，不得混为一谈。
+6. **麦门限时委托（只读）**：`campaign-calendar([specifiedDate])` 返回官方 Markdown 活动日历（进行中/未来/往期）；只展示官方活动名称/日期/内容/来源，**不派生奖品、优惠金额或资格**；不报名、不预约、不创建订单。
+7. **营养（尽力而为）**：`list-nutrition-foods`（无参数；返回自定义文本 `[N]{productName,...,energyKcal,...}:` + CSV 行，按表头解析）。失败 → 不展示营养信息。
+8. **组合验价**：每个候选组合走 **`calculate-price`**（`items[].productCode/quantity`；用券时券挂在商品上，且 `items[].couponId` 与 `items[].couponCode` **必须成对提交**，只传 ID 官方会返回 600010）得到权威应付总价。
    - 券试探顺序：预期折扣最优的**单券** → 最优**双券**（是否真可叠加由权威核验决定，**不默认可叠加**）→ 全部被拒才回退无券；
    - 失败 → 该组合作废；**绝不用单价加总冒充权威总价**。
 
@@ -216,7 +217,7 @@ AI：  麦当劳 MCP 水晶球暂时失联（连接器调用失败：网络超�
 ## 附：与源代码的一致性说明
 
 本 Skill 的描述与仓库代码保持同步（2026-10-14 核对）：
-- 工具名/参数：`burger_quest/mcp_base.py` 的 `TOOLS_USED`（8 个）+ `delivery-query-addresses/stores`，参数为官方 `list_tools` Schema 实测值；
+- 工具名/参数：`burger_quest/mcp_base.py` 的 `TOOLS_USED`（10 个）+ `delivery-query-addresses/stores`，参数为官方 `list_tools` Schema 实测值；
 - 调用链与规划规则：`burger_quest/service.py`（算价探测前置取名称与单价）与 `burger_quest/planner.py`（候选模板/券试探封顶/Top3）；
 - 解析规则：`burger_quest/nlparser.py`（模糊预算/否定口味/少糖明示/冲突裁决）；
 - 输出与卡片：`burger_quest/rpg.py` + `burger_quest/cards.py`（LIVE/DEMO 徽章/溯源/未知不填空）。

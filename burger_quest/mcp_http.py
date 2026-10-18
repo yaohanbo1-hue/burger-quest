@@ -123,7 +123,7 @@ POOL_TIMEOUT = 10.0      # 从连接池拿连接
 # - query-my-coupons：无券时官方返回纯文本「暂无可用优惠券」；
 # - delivery-query-addresses：无保存地址时可能返回纯文本说明。
 # 其余工具无信封一律按「响应解析失败」明确报错，不静默降级为空结果。
-PLAIN_TEXT_TOOLS = frozenset({"query-my-coupons", "delivery-query-addresses"})
+PLAIN_TEXT_TOOLS = frozenset({"query-my-coupons", "delivery-query-addresses", "campaign-calendar"})
 
 # 重试策略（有限次数，绝不无限重试）
 MAX_ATTEMPTS_NETWORK = 3   # 瞬时网络错误 / 5xx
@@ -789,6 +789,54 @@ class HttpMCPClient(MCPClient):
 
     def my_coupons(self):
         return adapt_coupons(self._call("query-my-coupons", {}), source="my")
+
+    # -- 第一阶段扩展（2026-10-18）：活动日历 + 可领券（均只读） --------------
+
+    def campaign_calendar(self, specified_date: Optional[str] = None):
+        """campaign-calendar（只读）-> list[Campaign]。
+
+        官方返回 **Markdown 文本**（非 JSON 信封），已在 PLAIN_TEXT_TOOLS 白名单；
+        解析见 campaign.py。旧价格/活动不会缓存（活动随时更新）。
+        """
+        from .campaign import parse_campaign_text
+
+        args: dict[str, Any] = {}
+        if specified_date:
+            args["specifiedDate"] = specified_date
+        text = self._call("campaign-calendar", args, purpose="campaign_calendar")
+        if not isinstance(text, str):
+            text = json.dumps(text, ensure_ascii=False)
+        return parse_campaign_text(text)
+
+    def available_coupons(self):
+        """available-coupons（只读）-> 可领取的麦麦省券列表。
+
+        **只查询，绝不领取**（不调用 auto-bind-coupons）。
+        实测：官方声明 data 为 array，但无券账户返回 data=null，MCP SDK 会因
+        structured content 校验失败抛 RuntimeError。此时如实上报「结构不符合
+        声明、无法确认」，而不是假装成空列表——字段缺失必须明示未知。
+        """
+        try:
+            raw = self._call("available-coupons", {}, purpose="coupon_pool")
+        except MCPError as e:
+            if "structured content" in str(e):
+                raise MCPError(
+                    "available-coupons",
+                    "官方返回结构不符合其声明的 Schema（data 为 null，期望 array）："
+                    "无法确认是否有可领取优惠券。可能是账户当前无可领券，或官方接口返回异常；"
+                    "本工具只读，未执行任何领取动作。",
+                ) from e
+            raise
+        except RuntimeError as e:
+            if "structured content" in str(e):
+                raise MCPError(
+                    "available-coupons",
+                    "官方返回结构不符合其声明的 Schema（data 为 null，期望 array）："
+                    "无法确认是否有可领取优惠券。可能是账户当前无可领券，或官方接口返回异常；"
+                    "本工具只读，未执行任何领取动作。",
+                ) from e
+            raise
+        return adapt_coupons(raw, source="available")
 
     def list_nutrition_foods(self):
         return adapt_nutrition(self._call("list-nutrition-foods", {}))

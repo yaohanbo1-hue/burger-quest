@@ -85,6 +85,21 @@ class MenuItem:
 
 
 @dataclass(frozen=True)
+class Campaign:
+    """官方活动日历中的一条活动（campaign-calendar，只读）。
+
+    status：live=进行中（官方「今日」段）｜upcoming=未来｜past=往期。
+    仅展示官方返回的名称/内容/日期/图片；不派生奖品、优惠金额或资格。
+    """
+
+    date: str          # yyyy-MM-dd（官方分段日期）
+    title: str
+    content: str = ""
+    image_url: str = ""
+    status: str = "upcoming"
+
+
+@dataclass(frozen=True)
 class Coupon:
     id: str
     name: str
