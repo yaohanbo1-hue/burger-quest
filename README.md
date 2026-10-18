@@ -28,7 +28,7 @@
 
 - **官方 MCP 全链路**：8 个在用只读工具（时间上下文/门店/菜单骨架/详情回退/优惠券/营养/权威算价，代码 `TOOLS_USED` 注册表为权威；并非每次任务全调）走官方 Streamable HTTP + 官方 `mcp` SDK；分工具超时、有限退避、429 降速、401 不重试、连续失败断路（重试/熔断细节有专项测试）；
 - **不编造铁律**：总价只认 `calculate-price` 权威返回；菜单价缺失的餐品直接出局；缺 Token 明确失败（退出码 2），**绝不回退演示数据**；
-- **工程完成度**：657 个测试、覆盖率 91.44%、mypy 0 error、bandit 0 finding、pip-audit 0 漏洞——四道 CI 门禁（覆盖率/mypy/安全扫描/依赖漏洞）每次推送全绿；
+- **工程完成度**：657 个测试、覆盖率 91.44%、mypy 0 error、bandit 0 finding、pip-audit 0 漏洞——四道质量门禁（覆盖率 ≥85% / mypy 零 error / bandit 零 finding / pip-audit 零漏洞）；**当前最新提交的 CI 通过 7/7 个 job**：Linux ×4（Python 3.10/3.11/3.12/3.13：全量测试 + 覆盖率门禁 + wheel 打包自检 + 空白检查）、Quality gates ×1（密钥扫描 / skill 文档一致性 / mypy / bandit / pip-audit / 离线演示可复现性）、Windows ×2（Python 3.11/3.12：全量测试 + PowerShell 脚本解析 + 无 Token 路径行为 + CLI 入口与离线演示）；
 - **安全边界**：本地 Web 界面 Host 白名单 + Origin 同源校验（挡 DNS rebinding 与跨站代打，`Origin: null` 一律拒绝）；Token 不落审计/日志/卡片/进度存档任何一处。
 
 **60 秒验证**（完全离线，无需 Token）：
@@ -120,7 +120,7 @@ powershell -File scripts\check-mcp-windows.ps1                                # 
 powershell -File scripts\run-windows.ps1                                      # 不带参数 = 查看帮助与退出码图例
 ```
 
-也可以激活虚拟环境后直接用命令：`.venv\Scripts\Activate.ps1`（PowerShell，位于仓库根目录执行），然后 `burger-quest --help`。
+也可以激活虚拟环境后直接用命令：`.\.venv\Scripts\Activate.ps1`（PowerShell，位于仓库根目录执行，`.\` 为当前目录前缀），然后 `burger-quest --help`。
 
 **退出码与安全退出**（`run-windows.ps1` 透传 CLI 语义）：`0`=成功；`1`=未生成方案（含等待选择门店）；`2`=配置或连接错误（如缺 Token）。脚本无后台任务，随时 `Ctrl+C` 干净退出。
 
