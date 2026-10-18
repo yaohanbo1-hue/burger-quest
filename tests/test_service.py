@@ -19,7 +19,7 @@ class BrokenPriceClient(MockMCPClient):
 
 
 def test_happy_path():
-    r = run_quest("我想吃辣，预算35，外送到南山科技园，一个人", MockMCPClient(), generated_at="2026-10-13")
+    r = run_quest("我想吃辣，预算35，到店自取，在深圳市南山区科技园，一个人", MockMCPClient(), generated_at="2026-10-13")
     assert r.chosen is not None
     assert r.chosen.price_checked
     assert r.store is not None and r.store.code == "DEMO-001"

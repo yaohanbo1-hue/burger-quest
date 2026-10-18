@@ -209,7 +209,7 @@ python -m burger_quest quest "我想吃辣，预算35，在深圳市南山区科
 | 场景 | 门店确定方式 | 前提条件 |
 | --- | --- | --- |
 | 到店自取 / 堂食 | `query-nearby-stores`（按 city/keyword，`beType=1`） | 提供位置或门店编码 |
-| 外送（麦乐送） | `delivery-query-addresses`（已保存地址）→ `delivery-query-stores`（可配送门店 + beCode） | **账户须已在麦当劳官方 App/小程序保存配送地址**；没有符合条件的地址时明确提示，不伪造外送能力 |
+| 外送（麦乐送） | 仅 `delivery-query-addresses`（已保存地址） | **当前不支持外送选店与算价**：`delivery-query-stores` 未通过真实验证已移除；有地址时明确提示「请使用官方 App 下单」，不伪造外送价格 |
 
 ```bash
 # 3b. 外送场景（需要账户已有保存的配送地址）

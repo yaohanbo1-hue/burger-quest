@@ -25,7 +25,7 @@
 | `query-store-coupons` | 门店可用券 | `storeCode`、`orderType`、`beType` | 下单可用券 | ✅ 接入 |
 | `query-my-coupons` | 卡包券 | 无 | 「我有什么券」 | ✅ 接入 |
 | `delivery-query-addresses` | 配送地址列表 | 无 | 外送前置 | ✅ 预留（外送链路依赖保存地址） |
-| `delivery-query-stores` | 地址可配送门店 | `addressId`、`beType` | 外送选店 | ✅ 预留（同上） |
+| ~~`delivery-query-stores`~~ | 地址可配送门店 | `addressId`、`beType` | 外送选店 | ⛔ **已移除**（未验证） |
 
 ### 1.2 优惠券与券资产（3 个，另有 2 个见上）
 
@@ -105,8 +105,7 @@
 
 ### 2.3 预留（2 个）
 
-`delivery-query-addresses` / `delivery-query-stores`：外送链路必需，但当前账户无保存地址，
-无法端到端验证；已在 `TOOLS_RESERVED` 登记，代码路径存在但未被主流程触发。
+`delivery-query-addresses`：外送链路必需，当前账户无保存地址，调用返回空列表（已验证可用，空态）；已登记 `TOOLS_RESERVED`。同链路的 `delivery-query-stores` 因无法验证已于 2026-10-18 移除。
 
 ---
 

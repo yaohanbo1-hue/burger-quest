@@ -134,7 +134,7 @@ def fake_http(monkeypatch):
 
 
 def test_demo_happy_path(capsys):
-    code = cli.main(["demo", "我想吃辣，预算35，外送到南山科技园，一个人"])
+    code = cli.main(["demo", "我想吃辣，预算35，到店自取，在深圳市南山区科技园，一个人"])
     out = capsys.readouterr().out
     assert code == 0
     assert "麦辣鸡腿堡" in out
@@ -192,45 +192,38 @@ def test_quest_without_token_never_falls_back_to_mock(capsys, monkeypatch):
 
 
 def test_quest_full_delivery_flow(capsys, fake_http, monkeypatch):
-    """完整外送链路：配送地址 -> 可配送门店 -> 菜单 -> 详情 -> 价格发现 -> 组合验价。"""
+    """外送：delivery-query-stores 未通过真实验证已移除（2026-10-18）。
+
+    保留可验证的 delivery-query-addresses；一旦账户确有地址，则明确告知能力边界，
+    不继续查门店、不发起算价（不伪造外送价格）。
+    """
     monkeypatch.setenv("MCD_MCP_TOKEN", "test-token-not-real")
     holder = fake_http()
     code = cli.main(["quest", "我想吃辣，预算50，外送到测试路1号"])
     out = capsys.readouterr().out
-    assert code == 0, out
-    assert "麦当劳（深圳测试路店）" in out
-    assert "麦当劳 MCP 实时数据" in out
-    assert "演示数据" not in out
+    assert code == 1, out
+    assert "外送门店查询能力未接入" in out
     tools = {name for name, _ in holder["session"].calls}
-    assert {
-        "now-time-info",
-        "delivery-query-addresses",
-        "delivery-query-stores",
-        "query-meals",
-        "query-meal-detail",
-        "calculate-price",
-    } <= tools
-    # 场景参数：外送 orderType=2/beType=2 + beCode（联调实测）
-    stores_call = next(a for n, a in holder["session"].calls if n == "delivery-query-stores")
-    assert stores_call["beType"] == 2 and stores_call["addressId"] == "ADDR-1"
-    meals_call = next(a for n, a in holder["session"].calls if n == "query-meals")
-    assert meals_call["orderType"] == 2 and meals_call["beType"] == 2 and meals_call["beCode"] == "BE-1"
+    assert "delivery-query-addresses" in tools
+    assert "delivery-query-stores" not in tools
+    assert "calculate-price" not in tools
 
 
 def test_quest_multiple_stores_lists_candidates(capsys, fake_http, monkeypatch):
+    """到店位置命中多家门店：列出候选、退出码 1，且不擅自选店查询菜单。"""
     monkeypatch.setenv("MCD_MCP_TOKEN", "test-token-not-real")
     responses = dict(LIVE_RESPONSES)
-    responses["delivery-query-stores"] = {
+    responses["query-nearby-stores"] = {
         "success": True,
         "code": 200,
         "data": [
-            {"storeCode": "SZ-1001", "storeName": "麦当劳（甲店）", "beCode": "BE-1"},
-            {"storeCode": "SZ-1002", "storeName": "麦当劳（乙店）", "beCode": "BE-2"},
-            {"storeCode": "SZ-1003", "storeName": "麦当劳（丙店）", "beCode": "BE-3"},
+            {"storeCode": "SZ-1001", "storeName": "麦当劳（甲店）", "address": "深圳市南山区测试路1号"},
+            {"storeCode": "SZ-1002", "storeName": "麦当劳（乙店）", "address": "深圳市南山区测试路2号"},
+            {"storeCode": "SZ-1003", "storeName": "麦当劳（丙店）", "address": "深圳市南山区测试路3号"},
         ],
     }
     holder = fake_http(responses)
-    code = cli.main(["quest", "预算50，外送到测试路"])
+    code = cli.main(["quest", "预算50，到店自取，在测试路"])
     out = capsys.readouterr().out
     assert code == 1
     assert "候选门店" in out
@@ -259,7 +252,7 @@ def test_quest_business_error_is_friendly(capsys, fake_http, monkeypatch):
     responses = dict(LIVE_RESPONSES)
     responses["calculate-price"] = {"success": False, "code": 600048, "message": "外送场景下，beType=2/5/6时必传beCode"}
     fake_http(responses)
-    code = cli.main(["quest", "预算50，外送到测试路1号"])
+    code = cli.main(["quest", "预算50，到店自取，在测试路1号"])
     out = capsys.readouterr().out
     assert code == 1
     assert "beCode" in out
@@ -276,7 +269,7 @@ def test_quest_connection_failure(capsys, fake_http, monkeypatch):
         raise MCPError("mcd-mcp", "MCP 连接失败：模拟网络不可达；请检查网络能否访问 https://mcp.mcd.cn")
 
     monkeypatch.setattr("burger_quest.mcp_http.HttpMCPClient", broken_factory)
-    code = cli.main(["quest", "预算50，外送到测试路"])
+    code = cli.main(["quest", "预算50，到店自取，在测试路"])
     out = capsys.readouterr().out
     assert code == 2
     assert "连接失败" in out

@@ -119,11 +119,6 @@ class MockMCPClient(MCPClient):
         self._record("delivery-query-addresses", {}, True)
         return [a for a in self.data.get("delivery_addresses", []) if isinstance(a, dict)]
 
-    def delivery_stores(self, address_id: str, be_type: int = 2):
-        self._record("delivery-query-stores", {"addressId": address_id, "beType": be_type}, True)
-        mapping = self.data.get("delivery_stores", {})
-        return adapt_stores(mapping.get(str(address_id), []))
-
     def query_meals(self, scene: OrderScene):
         """只返回「编码 + 分类 + 标签」骨架（与真实 query-meals 一致，无名称无价格）。"""
         self._record("query-meals", {"storeCode": scene.store_code, "orderType": scene.order_type, "beType": scene.be_type}, True)

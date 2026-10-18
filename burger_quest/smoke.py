@@ -41,7 +41,6 @@ READONLY_TOOLS = frozenset(
         "list-nutrition-foods",
         "calculate-price",
         "delivery-query-addresses",
-        "delivery-query-stores",
     }
 )
 

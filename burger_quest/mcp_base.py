@@ -68,7 +68,7 @@ from .models import (
 #                   query-store-coupons / query-my-coupons /
 #                   list-nutrition-foods / calculate-price
 #   1 个餐品详情回退：query-meal-detail（名称价格默认来自算价 productList）
-#   2 个外送专用：delivery-query-addresses / delivery-query-stores
+#   1 个外送专用：delivery-query-addresses（delivery-query-stores 未通过真实验证，已移除）
 #   2 个第一阶段扩展（只读）：campaign-calendar / available-coupons
 # 合计 12 个可用工具；TOOLS_RESERVED 中的写操作/抽奖工具一律不主动调用。
 TOOLS_USED = [
@@ -87,7 +87,6 @@ TOOLS_USED = [
 # 预留但 MVP 不主动调用的工具（写进文档说明边界）
 TOOLS_RESERVED = [
     "delivery-query-addresses",
-    "delivery-query-stores",
     "delivery-create-address",
     "auto-bind-coupons",
     "create-order",
@@ -103,7 +102,6 @@ TOOL_PURPOSE = {
     "now-time-info": "time_context",
     "query-nearby-stores": "store_resolution",
     "delivery-query-addresses": "store_resolution",
-    "delivery-query-stores": "store_resolution",
     "query-meals": "menu_skeleton",
     "query-meal-detail": "meal_name",
     "query-store-coupons": "coupon_pool",
@@ -123,7 +121,6 @@ CACHEABLE_TTL = {
     "now-time-info": 30.0,
     "query-nearby-stores": 120.0,
     "delivery-query-addresses": 60.0,
-    "delivery-query-stores": 120.0,
     "query-meals": 300.0,
     "query-meal-detail": 300.0,
     "list-nutrition-foods": 600.0,
@@ -346,10 +343,6 @@ class MCPClient(ABC):
     @abstractmethod
     def delivery_addresses(self) -> list[dict]:
         """delivery-query-addresses -> 用户已保存的配送地址（含 addressId）"""
-
-    @abstractmethod
-    def delivery_stores(self, address_id: str, be_type: int = 2) -> list[Store]:
-        """delivery-query-stores -> 某配送地址可配送的门店（含 beCode）"""
 
     @abstractmethod
     def query_meals(self, scene: OrderScene) -> list[MenuItem]:

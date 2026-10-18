@@ -65,7 +65,7 @@ description: 麦门异世界 Burger Quest —— 基于麦当劳中国官方 MCP
 1. **`now-time-info`**（无参数）—— 时间上下文；失败记提示，不阻塞。
 2. **门店确定（不编造门店、不默默选择）**：
    - 用户给了门店编码 → 到店场景直接用；
-   - 外送场景 → `delivery-query-addresses`（无参数）取已保存地址 → `delivery-query-stores(beType=2, addressId=…)` 拿可配送门店与 beCode；无保存地址时明确说明并停止；
+   - 外送场景 → `delivery-query-addresses`（无参数）取已保存地址；无地址时明确说明并停止；有地址时明确提示「外送门店查询能力未接入（该工具未通过真实验证已移除），请用官方 App 下单」——不要编造外送方案；
    - 到店场景 → `query-nearby-stores(beType=1, searchType=2, city=…, keyword=…)`（city/keyword 至少一个）：
      - **0 家** → 明确告知「未找到附近门店」，请用户补充更具体地址或提供编码；
      - **1 家** → 使用；

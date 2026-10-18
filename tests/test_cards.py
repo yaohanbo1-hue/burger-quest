@@ -14,7 +14,7 @@ from burger_quest.models import Coupon, MenuItem, PlanItem, PlanOption
 from burger_quest.service import run_quest
 
 
-def _result(text="想吃辣，预算35，外送到南山科技园"):
+def _result(text="想吃辣，预算35，到店自取，在深圳市南山区科技园"):
     client = MockMCPClient()
     return run_quest(text, client, generated_at="2026-10-13 18:51:16")
 
@@ -89,7 +89,7 @@ def test_html_card_live_mode_badge():
 
 def test_html_card_escapes_user_text():
     """用户输入中的 HTML 必须被转义（位置信息会进入任务背景）。"""
-    r = _result("外送到<b>测试</b>科技园，预算35")
+    r = _result("到店自取，在<b>测试</b>科技园，预算35")
     assert "<b>测试</b>" not in r.card_html
     assert "&lt;b&gt;测试&lt;/b&gt;" in r.card_html
     r2 = _result("想吃<script>alert(1)</script>辣，预算35")
@@ -391,7 +391,7 @@ def rpg_price_total(r):
 
 def test_snapshot_card_still_escapes_malicious_input():
     """快照语义不影响转义（纵深防御）。"""
-    r = _result("外送到<b>测试</b>科技园，预算35")
+    r = _result("到店自取，在<b>测试</b>科技园，预算35")
     html = cards.render_html(
         r.constraints, r.chosen, r.store, r.time_info, r.data_sources["mode"],
         "2026-10-14 20:27:01", demo=False, snapshot=True,
@@ -404,6 +404,6 @@ def test_snapshot_card_still_escapes_malicious_input():
 def test_demo_data_never_marked_as_live_snapshot():
     """红线：演示数据即使传了 snapshot 也不得标 LIVE SNAPSHOT（mock 即 demo）。"""
     client = MockMCPClient()
-    r = run_quest("我想吃辣，预算35，外送到南山科技园，一个人", client, generated_at="2026-10-14 20:27:01", card_snapshot=True)
+    r = run_quest("我想吃辣，预算35，到店自取，在深圳市南山区科技园，一个人", client, generated_at="2026-10-14 20:27:01", card_snapshot=True)
     assert "LIVE SNAPSHOT" not in r.card_html
     assert "DEMO · 离线演示数据" in r.card_html  # 演示数据只能标 DEMO

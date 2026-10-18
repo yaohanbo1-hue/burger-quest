@@ -99,7 +99,7 @@ def test_token_not_in_audit_records():
 def test_token_not_in_cards_and_json(tmp_path, monkeypatch):
     """卡片/JSON/故事/审计摘要均不泄露 Token。"""
     monkeypatch.setenv("MCD_MCP_TOKEN", FAKE_TOKEN)
-    r = run_quest("想吃辣，预算35，外送到南山科技园", MockMCPClient(), generated_at="2026-10-14")
+    r = run_quest("想吃辣，预算35，到店自取，在深圳市南山区科技园", MockMCPClient(), generated_at="2026-10-14")
     outputs = [
         r.card_html,
         r.card_markdown,
@@ -361,7 +361,7 @@ def test_full_quest_only_calls_readonly_tools():
         "query-lottery-info", "query-my-prizes",
     }
     client = MockMCPClient()
-    run_quest("预算35，想吃辣，两个人，外送到南山科技园", client)
+    run_quest("预算35，想吃辣，两个人，到店自取，在深圳市南山区科技园", client)
     called = {c["tool"] for c in client.calls}
     assert called, "应有调用记录"
     assert not (called & WRITE_TOOLS), f"出现写操作调用：{called & WRITE_TOOLS}"

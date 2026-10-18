@@ -450,7 +450,7 @@ def test_e7_serialize_result_json_safe_and_no_token_leak():
     from burger_quest.mcp_mock import MockMCPClient
     from burger_quest.service import run_quest
 
-    result = run_quest("我想吃辣，预算35，外送到南山科技园，一个人", MockMCPClient())
+    result = run_quest("我想吃辣，预算35，到店自取，在深圳市南山区科技园，一个人", MockMCPClient())
     payload = webui.serialize_result(result)
     text = json.dumps(payload, ensure_ascii=False)  # 不可序列化会在这里炸
     assert "Bearer" not in text and "MCD_MCP_TOKEN" not in text, "响应疑似夹带 Token"

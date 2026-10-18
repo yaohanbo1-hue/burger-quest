@@ -277,35 +277,21 @@ def test_delivery_without_addresses_explains():
     assert any("麦当劳官方 App" in w for w in r.warnings)
 
 
-def test_delivery_with_address_full_flow():
+def test_delivery_with_address_reports_unsupported():
+    """2026-10-18：delivery-query-stores 未通过真实验证，已从项目移除。
+
+    有地址时明确告知外送能力边界：不查门店、不伪造价格、不静默降级。
+    """
     client = StubLiveClient(
         addresses=[{"addressId": "ADDR-1", "address": "深圳市南山区测试路1号", "beCode": "BE-1"}],
-        delivery_stores_map={"ADDR-1": [Store(code="A-1", name="麦当劳（甲店）", be_code="BE-1")]},
-        menus={"A-1": list(STUB_SKELETON)},
     )
     r = run_quest("外送到测试路，预算50，想吃辣", client)
-    assert r.chosen is not None
-    assert r.store.code == "A-1"
-    assert r.chosen.price_checked
-    # 外送场景：算价带配送费（场景 orderType=2）
-    assert r.chosen.delivery_fee_cents == 900
-    tools = [c[0] for c in client.calls]
-    assert "delivery-query-addresses" in tools and "delivery-query-stores" in tools
-
-
-def test_delivery_multiple_stores_listed():
-    client = StubLiveClient(
-        addresses=[{"addressId": "ADDR-1", "address": "深圳市南山区测试路1号"}],
-        delivery_stores_map={
-            "ADDR-1": [
-                Store(code="A-1", name="麦当劳（甲店）", be_code="BE-1"),
-                Store(code="A-2", name="麦当劳（乙店）", be_code="BE-2"),
-            ]
-        },
-    )
-    r = run_quest("外送到测试路，预算35", client)
     assert r.chosen is None
-    assert [s.code for s in r.store_candidates] == ["A-1", "A-2"]
+    assert r.store is None
+    assert any("外送门店查询能力未接入" in w for w in r.warnings)
+    tools = [c[0] for c in client.calls]
+    assert "delivery-query-addresses" in tools
+    assert "delivery-query-stores" not in tools
 
 
 def test_delivery_with_explicit_store_code_falls_back_to_takeaway():
@@ -346,43 +332,3 @@ def test_dining_mode_default_is_disclosed():
     r = run_quest("预算35，想吃辣", MockMCPClient())
     assert any("未识别用餐方式" in w for w in r.warnings)
     assert r.constraints.dining_mode == "takeaway"
-
-
-# ---------------------------------------------------------------- 外送分支矩阵补全（2026-10-16 审计新增）
-
-
-def test_delivery_multiple_addresses_uses_first_with_disclosure():
-    """多个配送地址：用第一个并明示（不静默选择）。"""
-    client = StubLiveClient(
-        addresses=[
-            {"addressId": "ADDR-1", "address": "深圳市南山区测试路1号", "beCode": "BE-1"},
-            {"addressId": "ADDR-2", "address": "深圳市福田区测试路2号", "beCode": "BE-2"},
-        ],
-        delivery_stores_map={"ADDR-1": [Store(code="A-1", name="麦当劳（甲店）", be_code="BE-1")]},
-        menus={"A-1": list(STUB_SKELETON)},
-    )
-    r = run_quest("外送到测试路，预算50，想吃辣", client)
-    assert r.chosen is not None
-    assert any("默认使用第一个配送地址" in w and "测试路1号" in w for w in r.warnings)
-
-
-def test_delivery_no_deliverable_stores_stops_honestly():
-    """地址存在但无可配送门店：明确停止，不编造门店。"""
-    client = StubLiveClient(
-        addresses=[{"addressId": "ADDR-1", "address": "深圳市南山区测试路1号", "beCode": "BE-1"}],
-        delivery_stores_map={"ADDR-1": []},
-    )
-    r = run_quest("外送到测试路，预算50，想吃辣", client)
-    assert r.chosen is None
-    assert any("未在配送地址" in w and "找到" in w for w in r.warnings)
-
-
-def test_delivery_store_without_be_code_stops_honestly():
-    """可配送门店未返回 beCode：明确停止（外送算价没有 beCode 无法进行）。"""
-    client = StubLiveClient(
-        addresses=[{"addressId": "ADDR-1", "address": "深圳市南山区测试路1号"}],
-        delivery_stores_map={"ADDR-1": [Store(code="A-1", name="麦当劳（甲店）", be_code="")]},
-    )
-    r = run_quest("外送到测试路，预算50，想吃辣", client)
-    assert r.chosen is None
-    assert any("beCode" in w for w in r.warnings)

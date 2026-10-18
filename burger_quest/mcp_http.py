@@ -743,11 +743,6 @@ class HttpMCPClient(MCPClient):
             a for a in addresses if isinstance(a, dict) and _first(a, "addressId", "address_id", "addressID", "id")
         ]
 
-    def delivery_stores(self, address_id: str, be_type: int = 2):
-        return adapt_stores(
-            self._call("delivery-query-stores", {"beType": be_type, "addressId": address_id})
-        )
-
     def query_meals(self, scene: OrderScene):
         return adapt_meals(
             self._call(

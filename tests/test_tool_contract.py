@@ -210,15 +210,13 @@ def test_becode_transfer_rules(official):
             assert args.get("beType") == 1, f"到店链路 {tool}.beType 应为 1，实际 {args.get('beType')}"
         if "orderType" in props:
             assert args.get("orderType") == 1, f"到店链路 {tool}.orderType 应为 1，实际 {args.get('orderType')}"
-    # 外送链路：orderType=2 的工具必须带 beCode（官方：麦乐送必传）
-    delivery_tools = {"query-meals", "query-meal-detail", "query-store-coupons", "calculate-price"}
-    seen = set()
-    for tool, args in _quest_calls(DELIVERY_RESPONSES, "外送到深圳市南山区科技园，预算35"):
-        if tool in delivery_tools:
-            assert args.get("orderType") == 2 and args.get("beType") == 2
-            assert args.get("beCode"), f"外送场景 {tool} 必须传 beCode（官方必传）"
-            seen.add(tool)
-    assert delivery_tools <= seen, f"外送链路未覆盖全部工具：{delivery_tools - seen}"
+    # 外送链路（2026-10-18 起）：delivery-query-stores 未经真实验证已移除。
+    # 外送输入只调用 delivery-query-addresses；有地址则明确提示能力未接入，
+    # 不再进入 菜单/详情/算价 链路，因此本项目不存在 beCode 传递场景。
+    menu_tools = {"query-meals", "query-meal-detail", "query-store-coupons", "calculate-price"}
+    delivery_called = {tool for tool, _ in _quest_calls(DELIVERY_RESPONSES, "外送到深圳市南山区科技园，预算35")}
+    assert "delivery-query-addresses" in delivery_called
+    assert not (menu_tools & delivery_called), "外送不再进入菜单/详情/算价链路"
 
 
 def test_nearby_stores_enum_values(official):

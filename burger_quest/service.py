@@ -9,7 +9,7 @@
 
 真实数据流（2026-10-13 联调实测后的官方工具链）：
 1. 门店：到店场景 query-nearby-stores（searchType=2 + city/keyword）；
-   外送场景 delivery-query-addresses -> delivery-query-stores（拿 beCode）。
+   外送场景 delivery-query-addresses（已保存地址）；外送门店查询未接入，
 2. 菜单骨架：query-meals 只返回「编码+分类+标签」，没有名称和价格。
 3. 名称：对短名单商品逐个 query-meal-detail。
 4. 价格：一次 calculate-price 传入全部短名单商品（各 1 件），
@@ -99,25 +99,14 @@ def _resolve_scene(c: Constraints, client: MCPClient, result: QuestResult):
                     "请到官方渠道添加地址后重试，或改为「到店自取 / 堂食」"
                 )
                 return None, None, ""
-            addr = addresses[0]
-            if len(addresses) > 1:
-                result.warnings.append(
-                    f"默认使用第一个配送地址「{addr.get('address', addr.get('addressId', ''))}」"
-                )
-            try:
-                stores = client.delivery_stores(str(addr.get("addressId", "")), be_type=2)
-            except MCPError as e:
-                result.warnings.append(f"可配送门店查询失败：{e}")
-                return None, None, ""
-            store = _pick_store(stores, result, f"配送地址「{addr.get('address', '')}」附近")
-            if store is None:
-                return None, None, ""
-            be_code = store.be_code or str(addr.get("beCode", "") or "")
-            if not be_code:
-                result.warnings.append("可配送门店未返回业务编码（beCode），无法进行外送算价")
-                return None, None, ""
-            source = f"delivery-query-stores @ 地址 {addr.get('addressId', '')}"
-            return OrderScene(store.code, order_type=2, be_type=2, be_code=be_code), store, source
+            # 2026-10-18：delivery-query-stores 未经真实联调验证（账户无保存地址，
+            # 无法取得 addressId），已从项目中移除。有地址时明确告知能力边界，
+            # 不静默降级、不猜测门店、不伪造外送价格。
+            result.warnings.append(
+                "外送门店查询能力未接入（delivery-query-stores 未通过真实验证，已从项目移除）；"
+                "当前仅支持「到店自取 / 堂食」，外送请使用官方 App 下单"
+            )
+            return None, None, ""
 
     # B. 显式门店编码（到店场景）
     if c.store_code:

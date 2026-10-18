@@ -22,8 +22,9 @@
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。
 **场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 11 个；`TOOLS_RESERVED` 另有 10 个，含外送 2 个与写操作/抽奖 8 个）：
 
-- **11 个在用只读工具**（`TOOLS_USED`）：7 个常规主链路 + 1 个详情回退 + 3 个扩展只读（`campaign-calendar` / `available-coupons` / `query-my-account`，只在对应功能里调用）。常规主链路**并非每个任务都会用到全部**——6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`，外送门店改由 `delivery-query-stores` 提供）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
-- **2 个外送专用工具**（`delivery-query-addresses` / `delivery-query-stores`，登记在 `TOOLS_RESERVED`）：仅外送场景使用，且需要账户已保存配送地址；账户无保存地址时该链路**未验证（BLOCKED）**，程序按诚实失败处理。
+- **11 个在用只读工具**（`TOOLS_USED`）：7 个常规主链路 + 1 个详情回退 + 3 个扩展只读（`campaign-calendar` / `available-coupons` / `query-my-account`，只在对应功能里调用）。常规主链路**并非每个任务都会用到全部**——6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`；外送门店查询未接入，见下）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
+- **1 个外送专用工具**（`delivery-query-addresses`，登记在 `TOOLS_RESERVED`）：仅外送场景使用，且需要账户已保存配送地址；账户无保存地址时程序明确提示并停止。
+- **已移除**：`delivery-query-stores`（地址→可配送门店）未经真实联调验证（账户无保存地址，取不到 `addressId`），**已从代码中删除**（2026-10-18）。有地址时程序明确提示「外送门店查询能力未接入，请使用官方 App 下单」，不查门店、不发起算价、不伪造外送价格。
 
 | 工具 | 用途 | 在调用链中的位置 |
 | --- | --- | --- |
@@ -36,10 +37,10 @@
 | `query-my-coupons` | 我的卡包优惠券 | 第 5 步，券池来源之二 |
 | `list-nutrition-foods` | 常见餐品营养数据（能量/蛋白质/脂肪/碳水/钠/钙） | 第 6 步，低卡/高蛋白筛选依据 |
 | *（外送专用）* `delivery-query-addresses` | 用户已保存的配送地址（取 addressId/beCode） | 第 2 步，**仅外送场景**；无地址 → 明确说明并停止 |
-| *（外送专用）* `delivery-query-stores` | 某配送地址可配送的门店（含 beCode） | 第 2 步，**仅外送场景** |
+| ~~`delivery-query-stores`~~ | — | **已移除**（未验证，见上） |
 
 > 注：`query-nearby-stores` 是**到店场景**的位置查询（`beType=1`）；外送场景的门店来自
-> `delivery-query-stores`（按已保存地址），两者不可互相替代。
+> 已保存地址仅用于提示用户（本项目不做外送门店查询），到店场景用 `query-nearby-stores`，两者不可互相替代。
 
 ### 预留但 MVP 不主动调用的工具
 
@@ -55,7 +56,7 @@
   ├─(1) now-time-info ────────────────► 时间上下文（失败 → warning，不阻塞）
   │
   ├─(2) 门店与场景确定：
-  │      ├─ 外送场景：delivery-query-addresses → delivery-query-stores（拿 beCode）
+  │      ├─ 外送场景：delivery-query-addresses → 明确提示外送门店查询未接入（不做算价）
   │      │    └─ 无保存地址 → 明确说明并停止（不假装能外送）
   │      ├─ 到店场景：query-nearby-stores(beType=1, searchType=2, city/keyword)
   │      │    ├─ 0 家 → 明确告知，请补充地址或提供编码（不猜门店）
@@ -122,7 +123,7 @@
 | `calculate-price` | `storeCode`、`orderType`、`beType`、`items[]`（`productCode`+`quantity`） | `items[].couponId` **+ `items[].couponCode`**（券挂商品上、两字段必须成对提交，见 3.9）、`beCode` |
 | `list-nutrition-foods` / `now-time-info` | 无 | — |
 | `delivery-query-addresses` | 无 | — |
-| `delivery-query-stores` | `beType`(2麦乐送/6团餐)、`addressId` | — |
+| ~~`delivery-query-stores`~~ | — | 已移除 |
 
 ### 返回结构（实测）
 
@@ -397,13 +398,13 @@ code=600010  使用优惠券需要couponId和couponCode
 | `list-nutrition-foods` | 无 | — | `{}` | ✅ | ✅ | ✅ 160 条 |
 | `calculate-price` | storeCode, orderType, beType | **items[]（商品级字段：productCode/quantity/couponId/couponCode/modification/roundList）**、beCode、gmServiceCode、needTableware、reservationDate、withOrder | 必填齐 + items + beCode 仅外送 | ✅ | ✅ | ✅ ¥15.90/¥24.00；600010 双字段契约实测 |
 | `delivery-query-addresses` | 无 | — | `{}` | ✅ | ✅ | ✅ 调用成功，账户无地址 |
-| `delivery-query-stores` | beType, addressId | beType 描述值 2=麦乐送 / 6=团餐（无 enum） | `{beType:2, addressId}` | ✅ | ✅ | ⬜ **待验证：账户无保存地址** |
+| ~~`delivery-query-stores`~~ | — | — | — | — | — | ⛔ 已移除（2026-10-18，未验证） |
 
 ### 契约核对结论（逐工具，无猜测）
 
-1. **字段传递全部正确**：门店编码（storeCode，官方要求全数字）、餐品编码（`code`，非 mealCode）、orderType/beType 组合、取餐方式（到店自取/堂食均走 orderType=1+beType=1）、配送方式（麦乐送 orderType=2+beType=2+beCode 来自 `delivery-query-stores`）——均与官方 Schema 及描述一致；
+1. **字段传递全部正确**：门店编码（storeCode，官方要求全数字）、餐品编码（`code`，非 mealCode）、orderType/beType 组合、取餐方式（到店自取/堂食均走 orderType=1+beType=1）、配送方式（本项目不覆盖外送，见 `delivery-query-stores` 已移除的说明）——均与官方 Schema 及描述一致；
 2. **beCode 传递规则锁定**：官方明示「到店自提场景 orderType=1 时 beCode 是无效参数，传了会报错」「麦乐送 orderType=2 必传 beCode」——引擎按 `scene.be_code` 为空即不传，天然合规；`tests/test_tool_contract.py` 对两条链路做端到端断言；
-3. **官方已定义、MVP 不传的能力**（登记备忘，非缺陷）：`reservationDate`（官方：非预约场景不传）、`needTableware`、`withOrder`、`gmServiceCode`、`modification`/`roundList`（套餐换选/特制，§3.6 已登记）、`beType=5` 得来速与 `beType=6` 团餐（引擎未接入，`query-nearby-stores` 的 beType 枚举也只有 [1,5]——外送门店必须走 `delivery-query-stores`，链路设计正确）；
+3. **官方已定义、MVP 不传的能力**（登记备忘，非缺陷）：`reservationDate`（官方：非预约场景不传）、`needTableware`、`withOrder`、`gmServiceCode`、`modification`/`roundList`（套餐换选/特制，§3.6 已登记）、`beType=5` 得来速与 `beType=6` 团餐（引擎未接入，`query-nearby-stores` 的 beType 枚举也只有 [1,5]——外送门店需走 `delivery-query-stores`，该工具未验证已移除）；
 4. **修复：优惠券 per-item 契约**（此前 §3.9 未覆盖的维度）。官方 Schema 把 `couponId`/`couponCode` 定义在 **items[] 商品级**——每件商品可各带一张券。旧 `build_calc_payload` 只往第一件商品挂 `coupons[0]`，双券试探的第二张被静默丢弃（payload 与单券试探完全相同，白烧一次权威调用，方案却宣称「提交 2 张券」）。已修：第 i 张券挂第 i 件商品；`coupon_sets` 增加**容量守卫**（商品数 < 券数时不生成挂不下的试探，不静默丢券）；mock 改为从 payload 实际提交的券推导折扣，恢复「演示不比真实宽松」不变量。**服务端对同单多券的接受性待有券账户验证**（§3.6）；
 5. **防御性解析加固**：`delivery-query-addresses` 返回容器官方未定义（无参数 Schema、真实账户无地址只验证过空态）→ 用 `_as_list` 兼容 list/`list`/`items`/`data`/`records`/`result`/`addresses` 容器并丢弃无 addressId 条目；餐品详情成功但无名称 → 服务层如实计数警告（原来静默跳过）；null/空列表/类型变化（categories 为 dict、营养文本缺表头、算价 data=null 等）全部有测试锁定「明确为空或丢弃坏条目，绝不猜测填空」；
 6. **仍待验证（无法从官方定义确认）**：① 优惠券 `percent` 字段语义（88 → 0.88 还是 8.8 折，无官方文档且无券账户，当前按 `p/100 if p>1 else p` 启发式并已在代码注释标注）；② 同单多券的服务端接受性（见上）；③ `query-my-coupons` 分页参数为 string 的取值边界（默认分页未触顶，未实测）。

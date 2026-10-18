@@ -162,7 +162,7 @@ def _condition_met(ach_id: str, result: QuestResult, demo: bool, stores_seen: se
     if ach_id == "nutrition_reader":
         return counts["nutrition"] >= 100
     if ach_id == "delivery_scout":
-        return "delivery-query-stores" in store_source
+        return "delivery-query-addresses" in store_source
     if ach_id == "store_collector":
         return len(stores_seen) >= 3
     if ach_id == "budget_keeper":

@@ -39,7 +39,7 @@ def test_all_mcp_tool_names_in_skill_are_real():
 
 def test_skill_mentions_all_tools_the_engine_uses():
     """引擎实际调用的 10 个工具 + 外送 2 个都应在文档中出现。"""
-    for tool in list(TOOLS_USED) + ["delivery-query-addresses", "delivery-query-stores"]:
+    for tool in list(TOOLS_USED) + ["delivery-query-addresses"]:
         assert tool in SKILL_TEXT, f"skill.md 缺少工具说明：{tool}"
 
 
