@@ -487,8 +487,16 @@ class WebApp:
             return run_quest(text, client, store_code=store_code)
 
     def nearby_stores(self, query: str):
+        # 与 service.py 任务路径同源拆分：官方 query-nearby-stores 要求 city 与
+        # keyword 同时非空（2026-10-18 真实联调实测：只传其一必回业务错误
+        # 600058「城市名或者关键词不能为空」——文案里的「或者」有误导，实为「且」）。
+        # 曾经把整个位置当 keyword 直传、city 留空，导致网页端「查询附近门店」
+        # 按钮对任何真实查询必失败；回归测试见 tests/test_webui_e2e.py E9。
+        from .service import _split_city
+
+        city, keyword = _split_city(query or "")
         with self._client() as client:
-            return client.nearby_stores(query)
+            return client.nearby_stores(keyword, city=city, be_type=1)
 
     def progress_lines(self, result) -> list:
         """本地虚拟进度结算（opt-in；未启用时返回说明行）。"""

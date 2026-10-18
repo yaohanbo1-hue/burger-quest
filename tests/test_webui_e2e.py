@@ -539,3 +539,66 @@ def test_e8_serve_reports_port_conflict():
         assert "无法监听" in str(ei.value), "端口占用必须给出可操作提示"
     finally:
         s.close()
+
+
+# ===========================================================================
+# E9. WebApp.nearby_stores 的 MCP 参数构造（2026-10-18 真实联调回归）
+#
+# 背景：官方 query-nearby-stores 要求 city 与 keyword 同时非空——只传其一
+# 必回业务错误 600058（错误文案「城市名或者关键词不能为空」里的「或者」
+# 有误导，2026-10-18 实测为「且」：keyword-only 与 city-only 均 600058，
+# city+keyword 正常返回）。WebApp.nearby_stores 曾把整个位置文本当 keyword
+# 直传、city 留空，网页端「查询附近门店」按钮因此对任何真实查询必失败
+# （演示路径用 Mock 客户端，参数宽容，掩盖了该缺陷）。修复与 service.py
+# 任务路径同源：_split_city 拆分后双传。以下用例锁死该行为防回归。
+# ===========================================================================
+
+
+class _RecordingClient:
+    """记录 nearby_stores 实参的假客户端（不发起任何网络调用）。"""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, int]] = []
+
+    def nearby_stores(self, keyword, city="", be_type=1):
+        self.calls.append((keyword, city, be_type))
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_e9_nearby_stores_splits_city_and_keyword(monkeypatch):
+    rec = _RecordingClient()
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: rec)
+    app = webui.WebApp()
+    app.nearby_stores("深圳市南山区科技园")
+    assert rec.calls == [("南山区科技园", "深圳市", 1)], "必须拆成 city+keyword 双传（官方要求同时非空）"
+
+
+def test_e9_nearby_stores_no_city_name_transparent(monkeypatch):
+    rec = _RecordingClient()
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: rec)
+    app = webui.WebApp()
+    app.nearby_stores("南山区科技园")  # 无市名：city 留空交由服务端裁决，本地不猜城市
+    assert rec.calls == [("南山区科技园", "", 1)]
+
+
+def test_e9_nearby_stores_empty_query_passes_empty(monkeypatch):
+    rec = _RecordingClient()
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: rec)
+    app = webui.WebApp()
+    app.nearby_stores("")
+    assert rec.calls == [("", "", 1)]
+
+
+def test_e9_split_matches_service_task_path():
+    """网页端与任务路径必须用同一个拆分函数（单一事实源）。"""
+    from burger_quest.service import _split_city
+
+    assert _split_city("深圳市南山区科技园") == ("深圳市", "南山区科技园")
+    assert _split_city("南山区科技园") == ("", "南山区科技园")
+    assert _split_city("") == ("", "")
