@@ -284,3 +284,66 @@ def test_webapp_coupons_all_fail_is_error(monkeypatch):
     out = webui.WebApp().coupons("1420762")
     assert out["state"] == "error"
     assert all(s["state"] == "error" for s in out["sections"])
+
+
+# ===========================================================================
+# E. 积分账户（query-my-account）：只保留数值，accountId 绝不进模型/输出
+# ===========================================================================
+
+
+def test_adapt_points_parses_strings_and_drops_account_id():
+    from burger_quest.mcp_base import adapt_points
+
+    acc = adapt_points(
+        {
+            "availablePoint": "120",
+            "accumulativePoint": "300",
+            "usedPoint": "180",
+            "nextMouthExpirePoint": "10",
+            "currency": "麦享会积分",
+            "accountId": "SECRET-ACCOUNT-ID",
+        }
+    )
+    assert acc.available == 120 and acc.accumulative == 300 and acc.used == 180
+    assert acc.currency == "麦享会积分"
+    assert acc.unknown_fields == ()
+    assert "SECRET" not in str(acc)  # 账户标识不得进入模型
+
+
+def test_adapt_points_missing_or_bad_fields_are_none_not_zero():
+    from burger_quest.mcp_base import adapt_points
+
+    missing = adapt_points({"currency": "x"})
+    assert missing.available is None and missing.accumulative is None
+    assert "availablePoint" in missing.unknown_fields
+
+    bad = adapt_points({"availablePoint": "abc", "accumulativePoint": None})
+    assert bad.available is None and bad.accumulative is None
+
+
+def test_webapp_account_ok_and_error(monkeypatch):
+    class _AccClient:
+        def __init__(self, fail=False):
+            self.fail = fail
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def my_account(self):
+            if self.fail:
+                raise MCPError("query-my-account", "boom", code=500)
+            from burger_quest.models import PointsAccount
+
+            return PointsAccount(available=42, accumulative=100, used=58, expiring_next_month=0, currency="麦享会积分")
+
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _AccClient())
+    ok = webui.WebApp().account()
+    assert ok["state"] == "ok" and ok["available"] == 42
+    assert "accountId" not in ok
+
+    monkeypatch.setattr(webui.WebApp, "_client", lambda self: _AccClient(fail=True))
+    err = webui.WebApp().account()
+    assert err["state"] == "error"

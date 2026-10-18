@@ -56,6 +56,7 @@ from .models import (
     CouponQuery,
     MenuItem,
     NutritionItem,
+    PointsAccount,
     PriceQuote,
     Store,
     yuan_to_cents,
@@ -81,6 +82,7 @@ TOOLS_USED = [
     "calculate-price",
     "campaign-calendar",
     "available-coupons",
+    "query-my-account",
 ]
 # 预留但 MVP 不主动调用的工具（写进文档说明边界）
 TOOLS_RESERVED = [
@@ -110,6 +112,7 @@ TOOL_PURPOSE = {
     "calculate-price": "price_check",
     "campaign-calendar": "campaign_calendar",
     "available-coupons": "coupon_pool",
+    "query-my-account": "points_account",
     "list_tools": "tool_discovery",
 }
 
@@ -324,6 +327,13 @@ class MCPClient(ABC):
         """
 
     @abstractmethod
+    def my_account(self) -> PointsAccount:
+        """query-my-account（只读）-> 积分账户。
+
+        只保留积分数值；官方返回的 accountId 属账户标识，**不得**进入模型/
+        日志/输出。字段缺失时为 None（上层显示「未知」而不是 0）。
+        """
+    @abstractmethod
     def available_coupons(self) -> CouponQuery:
         """available-coupons（只读）-> CouponQuery（区分 ok / empty / unknown）。
 
@@ -479,6 +489,45 @@ def adapt_meal_detail(raw: Any) -> dict:
         "is_combo": bool(rounds),
         "raw": data,
     }
+
+
+def adapt_points(raw: Any) -> PointsAccount:
+    """query-my-account -> PointsAccount。
+
+    安全约定：官方返回的 `accountId` 属账户标识，**在此丢弃**——模型、日志、
+    CLI/Web 一律不得出现。数值字段可能是字符串（实测 "0"），转换失败记 None
+    并进入 unknown_fields（上层显示「未知」而不是 0）。
+    """
+    d = raw if isinstance(raw, dict) else {}
+    inner = d.get("data")
+    data: dict[str, Any] = inner if isinstance(inner, dict) else d
+
+    def num(*keys: str) -> Optional[int]:
+        v = _first(data, *keys)
+        if v is None:
+            return None
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+
+    available = num("availablePoint", "availablePoints", "point", "points")
+    accumulative = num("accumulativePoint", "accumulativePoints", "totalPoint")
+    used = num("usedPoint", "usedPoints")
+    expiring = num("nextMouthExpirePoint", "nextMonthExpirePoint")
+    missing = tuple(
+        name
+        for name, val in (("availablePoint", available), ("accumulativePoint", accumulative))
+        if val is None
+    )
+    return PointsAccount(
+        available=available,
+        accumulative=accumulative,
+        used=used,
+        expiring_next_month=expiring,
+        currency=str(_first(data, "currency", default="") or ""),
+        unknown_fields=missing,
+    )
 
 
 def adapt_coupons(raw: Any, source: str) -> list[Coupon]:

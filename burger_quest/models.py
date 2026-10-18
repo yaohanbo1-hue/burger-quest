@@ -116,6 +116,23 @@ class Coupon:
 
 
 @dataclass(frozen=True)
+class PointsAccount:
+    """麦享会积分账户（query-my-account，只读）。
+
+    **只保留积分数值**：官方返回的 accountId 属于账户标识，绝不进入模型、
+    日志、CLI/Web 输出。字段缺失或无法解析时为 None（上层显示「未知」），
+    不得显示成 0。
+    """
+
+    available: Optional[int] = None
+    accumulative: Optional[int] = None
+    used: Optional[int] = None
+    expiring_next_month: Optional[int] = None
+    currency: str = ""
+    unknown_fields: tuple = ()
+
+
+@dataclass(frozen=True)
 class CouponQuery:
     """可领券查询结果：显式区分「真实列表 / 官方明确无券 / 语义未知」。
 

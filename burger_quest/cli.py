@@ -368,6 +368,58 @@ def _cmd_detail(args) -> int:
     return 0
 
 
+def _cmd_account(args) -> int:
+    """积分账户（query-my-account，只读）：只展示数值，不输出 accountId。"""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    client: MCPClient
+    if args.demo:
+        from .mcp_mock import MockMCPClient
+
+        client = MockMCPClient()
+        source = "演示数据（MockMCPClient，非实时）"
+    else:
+        from .mcp_http import HttpMCPClient
+
+        client = HttpMCPClient()
+        source = "麦当劳官方 query-my-account（实时）"
+
+    try:
+        with client:
+            acc = client.my_account()
+    except MCPError as e:
+        print(f"❌ 积分查询失败：{e}")
+        return 2
+
+    def show(v):
+        return "未知" if v is None else str(v)
+
+    print(f"💎 麦享会积分 · 来源：{source}")
+    print(f"   查询时间 {now} · 只读（不读取、不输出 accountId）")
+    print(f"   可用积分：{show(acc.available)}")
+    print(f"   累计积分：{show(acc.accumulative)} · 已用：{show(acc.used)} · 下月过期：{show(acc.expiring_next_month)}")
+    if acc.currency:
+        print(f"   币种：{acc.currency}")
+    if acc.unknown_fields:
+        print(f"   ⚠️ 字段缺失（显示为未知，不当作 0）：{'、'.join(acc.unknown_fields)}")
+
+    if args.json:
+        payload = {
+            "generated_at": now,
+            "source": "query-my-account",
+            "source_note": source,
+            "readonly": True,
+            "available": acc.available,
+            "accumulative": acc.accumulative,
+            "used": acc.used,
+            "expiring_next_month": acc.expiring_next_month,
+            "currency": acc.currency,
+            "unknown_fields": list(acc.unknown_fields),
+        }
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"JSON 已写入：{args.json}")
+    return 0
+
+
 def _cmd_campaign(args) -> int:
     """麦门限时委托：只读查询官方活动日历（不报名、不预约、不领奖）。"""
     from . import campaign as campaign_mod
@@ -849,6 +901,21 @@ def main(argv=None) -> int:
     p_coupons.add_argument("--json", default=None, help="结果 JSON 输出路径")
     p_coupons.add_argument("--demo", action="store_true", help="离线演示（结果明确标注为演示数据）")
 
+    p_account = sub.add_parser(
+        "account",
+        help="麦享会积分账户（query-my-account，只读；不含 accountId）",
+        description=(
+            "查询麦享会积分余额（只读）。\n"
+            "- 只展示积分数值（可用/累计/已用/下月过期）；\n"
+            "- 官方返回的 accountId 属账户标识，不会被读取或输出；\n"
+            "- 字段缺失时显示「未知」，不会显示成 0。\n"
+            "退出码：0=成功；2=配置/连接错误（如缺 Token）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_account.add_argument("--json", default=None, help="结果 JSON 输出路径")
+    p_account.add_argument("--demo", action="store_true", help="离线演示（明确标注演示数据）")
+
     sub.add_parser("tools", help="列出引擎实际调用的 MCP 工具")
 
     args = parser.parse_args(argv)
@@ -883,6 +950,9 @@ def main(argv=None) -> int:
 
     if args.cmd == "coupons":
         return _cmd_coupons(args)
+
+    if args.cmd == "account":
+        return _cmd_account(args)
 
     if args.cmd == "smoke":
         from . import smoke

@@ -76,6 +76,7 @@ description: 麦门异世界 Burger Quest —— 基于麦当劳中国官方 MCP
    - `productList` 没给名称的商品，才回退逐个 **`query-meal-detail(storeCode, orderType, beType, code)`** 补名称（餐品编码参数名是 `code`），同时可展示真实套餐组成/可替换项；全部失败 → 停止（不编造餐品名）。
 5. **优惠券（尽力而为，失败不阻塞）**：`query-store-coupons(storeCode, orderType, beType)` + `query-my-coupons()` + **`available-coupons()`（只读查询可领取券）**。失败 → 按无券方案计算并说明。
    - **绝不调用 `auto-bind-coupons`**（领取会改变用户账户状态）；`available-coupons` 只查询展示，三类券（可领取/卡包/门店适用）分开标注，不得混为一谈。
+   - **积分账户**（`query-my-account`，只读，独立功能）：返回麦享会积分（`availablePoint` 等为字符串数字）；只展示数值，**不读取、不输出 `accountId`**（账户标识），字段缺失显示「未知」而不是 0。
 6. **麦门限时委托（只读）**：`campaign-calendar([specifiedDate])` 返回官方 Markdown 活动日历（进行中/未来/往期）；只展示官方活动名称/日期/内容/来源，**不派生奖品、优惠金额或资格**；不报名、不预约、不创建订单。
 7. **营养（尽力而为）**：`list-nutrition-foods`（无参数；返回自定义文本 `[N]{productName,...,energyKcal,...}:` + CSV 行，按表头解析）。失败 → 不展示营养信息。
 8. **组合验价**：每个候选组合走 **`calculate-price`**（`items[].productCode/quantity`；用券时券挂在商品上，且 `items[].couponId` 与 `items[].couponCode` **必须成对提交**，只传 ID 官方会返回 600010）得到权威应付总价。
@@ -217,7 +218,7 @@ AI：  麦当劳 MCP 水晶球暂时失联（连接器调用失败：网络超�
 ## 附：与源代码的一致性说明
 
 本 Skill 的描述与仓库代码保持同步（2026-10-14 核对）：
-- 工具名/参数：`burger_quest/mcp_base.py` 的 `TOOLS_USED`（10 个）+ `delivery-query-addresses/stores`，参数为官方 `list_tools` Schema 实测值；
+- 工具名/参数：`burger_quest/mcp_base.py` 的 `TOOLS_USED`（11 个）+ `delivery-query-addresses/stores`，参数为官方 `list_tools` Schema 实测值；
 - 调用链与规划规则：`burger_quest/service.py`（算价探测前置取名称与单价）与 `burger_quest/planner.py`（候选模板/券试探封顶/Top3）；
 - 解析规则：`burger_quest/nlparser.py`（模糊预算/否定口味/少糖明示/冲突裁决）；
 - 输出与卡片：`burger_quest/rpg.py` + `burger_quest/cards.py`（LIVE/DEMO 徽章/溯源/未知不填空）。

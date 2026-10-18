@@ -66,6 +66,9 @@ CONTRACT_STATUS = {
         "real": "2026-10-18 裸 HTTP 实测：无券时官方返回 code=499 + data=null（语义化空态，非错误），"
                 "已按 empty 分类并展示；有券账户的列表结构仍未验证",
     },
+    "query-my-account": {
+        "real": "2026-10-18 实测返回 availablePoint=0 等积分字段（数值为字符串，已容错转换）",
+    },
 }
 
 

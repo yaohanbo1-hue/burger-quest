@@ -429,6 +429,24 @@
     }).catch(function () { toolsBusy("本地服务无响应"); });
   }
 
+  function loadAccount() {
+    toolsBusy("正在查询积分账户…");
+    fetch("/api/account").then(function (r) { return r.json(); }).then(function (d) {
+      var out = $("tools-out");
+      clear(out);
+      if (d.state === "error") { out.appendChild(stateBanner("connection", d.error || "积分查询失败")); return; }
+      var val = function (v) { return (v === null || v === undefined) ? "未知" : v; };
+      out.appendChild(el("h3", null, "麦享会积分"));
+      out.appendChild(el("p", null, "可用积分：" + val(d.available)));
+      out.appendChild(el("p", null, "累计积分：" + val(d.accumulative) + " · 已用：" + val(d.used) + " · 下月过期：" + val(d.expiring_next_month)));
+      if (d.currency) out.appendChild(el("p", "hint", "币种：" + d.currency));
+      if ((d.unknown_fields || []).length) {
+        out.appendChild(el("p", "hint", "⚠️ 字段缺失（显示为未知，不当作 0）：" + d.unknown_fields.join("、")));
+      }
+      out.appendChild(el("p", "hint", "只读：不读取、不输出 accountId。数据更新时间 " + d.generated_at));
+    }).catch(function () { toolsBusy("本地服务无响应"); });
+  }
+
   // ---------- 事件绑定 ----------
   document.addEventListener("DOMContentLoaded", function () {
     refreshStatus();
@@ -444,6 +462,7 @@
     $("btn-campaign").addEventListener("click", loadCampaign);
     $("btn-coupons").addEventListener("click", loadCoupons);
     $("btn-detail").addEventListener("click", loadDetail);
+    $("btn-account").addEventListener("click", loadAccount);
     // 常用句式快捷填充（2026-10-18）：点击填入需求框，用户可继续修改再提交
     document.querySelectorAll("[data-fill]").forEach(function (btn) {
       btn.addEventListener("click", function () {

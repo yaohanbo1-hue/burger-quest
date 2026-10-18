@@ -26,7 +26,7 @@
 
 **技术亮点**：
 
-- **官方 MCP 全链路**：10 个在用只读工具（7 个常规主链路 + 1 个餐品详情回退 + 2 个第一阶段扩展：活动日历/可领券；代码 `TOOLS_USED` 注册表为权威，并非每次任务全调）走官方 Streamable HTTP + 官方 `mcp` SDK；分工具超时、有限退避、429 降速、401 不重试、连续失败断路（重试/熔断细节有专项测试）；
+- **官方 MCP 全链路**：11 个在用只读工具（7 个常规主链路 + 1 个餐品详情回退 + 3 个扩展只读：活动日历/可领券/积分账户；代码 `TOOLS_USED` 注册表为权威，并非每次任务全调）走官方 Streamable HTTP + 官方 `mcp` SDK；分工具超时、有限退避、429 降速、401 不重试、连续失败断路（重试/熔断细节有专项测试）；
 - **不编造铁律**：总价只认 `calculate-price` 权威返回；菜单价缺失的餐品直接出局；缺 Token 明确失败（退出码 2），**绝不回退演示数据**；
 - **工程完成度**：657 个测试、覆盖率 91.44%、mypy 0 error、bandit 0 finding、pip-audit 0 漏洞——四道质量门禁（覆盖率 ≥85% / mypy 零 error / bandit 零 finding / pip-audit 零漏洞）；**当前最新提交的 CI 通过 7/7 个 job**：Linux ×4（Python 3.10/3.11/3.12/3.13：全量测试 + 覆盖率门禁 + wheel 打包自检 + 空白检查）、Quality gates ×1（密钥扫描 / skill 文档一致性 / mypy / bandit / pip-audit / 离线演示可复现性）、Windows ×2（Python 3.11/3.12：全量测试 + PowerShell 脚本解析 + 无 Token 路径行为 + CLI 入口与离线演示）；
 - **安全边界**：本地 Web 界面 Host 白名单 + Origin 同源校验（挡 DNS rebinding 与跨站代打，`Origin: null` 一律拒绝）；Token 不落审计/日志/卡片/进度存档任何一处。
@@ -118,6 +118,7 @@ powershell -File scripts\run-windows.ps1 quest "我想吃辣，预算35，到店
 powershell -File scripts\run-windows.ps1 progress --progress .\burger-quest-progress.json  # 本地虚拟进度/成就图鉴
 powershell -File scripts\run-windows.ps1 campaign                                   # 麦门限时委托（官方活动日历，只读）
 powershell -File scripts\run-windows.ps1 coupons --store-code 1420762               # 优惠券猎人（三类券分开，只读不领取）
+powershell -File scripts\run-windows.ps1 account                                   # 积分账户（只读；不输出 accountId）
 powershell -File scripts\run-windows.ps1 detail 9900011121 --store-code 1420762     # 套餐装备（真实组成/可替换项）
 powershell -File scripts\check-mcp-windows.ps1                                # 真实连接诊断
 powershell -File scripts\run-windows.ps1                                      # 不带参数 = 查看帮助与退出码图例
@@ -243,7 +244,7 @@ python -m burger_quest smoke --demo   # 离线演示模式：无需 Token，可�
 python -m burger_quest smoke          # 真实模式：八步只读检查（需 MCD_MCP_TOKEN）
 ```
 
-八步 = 连接 → 工具发现（项目依赖的 10 个工具须在官方 35 个工具清单内）→ 服务器时间 →
+八步 = 连接 → 工具发现（项目依赖的 11 个工具须在官方 35 个工具清单内）→ 服务器时间 →
 附近门店 → 菜单 → 餐品详情 → 算价 → 安全自检（仅只读工具）。逐步输出 PASS/FAIL，
 退出码 0=全过 / 1=有失败 / 2=配置错误；Token 只从环境变量读，绝不打印。
 
@@ -308,7 +309,7 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 
 ### 4.6 安全与隐私边界（Web 界面）
 
-**工具箱（Web，只读）**：页面「工具箱」面板提供三个入口——麦门限时委托（官方活动日历，进行中/未来/往期分开）、优惠券猎人（可领取/我的卡包/门店适用三类分开，未知状态不会显示成 0 张）、套餐装备（真实组成/可替换项/特制项；明确标注「不提供套餐改价」）。接口：`GET /api/campaign`、`GET /api/coupons?store_code=`、`POST /api/detail`。状态语义见 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) 末节（活动 `ok/empty/parse_error/error`；券分区 `ok/empty/unknown/skipped/error`，部分失败为 `partial`，失败分区不会显示为 0 张）。接口能力与阻塞项见 [API_CAPABILITY_AUDIT.md](API_CAPABILITY_AUDIT.md)。
+**工具箱（Web，只读）**：页面「工具箱」面板提供三个入口——麦门限时委托（官方活动日历，进行中/未来/往期分开）、优惠券猎人（可领取/我的卡包/门店适用三类分开，未知状态不会显示成 0 张）、套餐装备（真实组成/可替换项/特制项；明确标注「不提供套餐改价」）。接口：`GET /api/campaign`、`GET /api/coupons?store_code=`、`POST /api/detail`。状态语义见 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) 末节（活动 `ok/empty/parse_error/error`；券分区 `ok/empty/unknown/skipped/error`，部分失败为 `partial`，失败分区不会显示为 0 张）。接口能力与阻塞项见 [API_CAPABILITY_AUDIT.md](API_CAPABILITY_AUDIT.md)；全量工具梳理与选型理由见 [MCP_TOOL_SELECTION.md](MCP_TOOL_SELECTION.md)。
 
 本地 Web 界面在 `127.0.0.1:8787` 开HTTP 服务。**浏览器里任意一个网页都能对本机端口发请求**——CORS 只阻止读取响应，阻止不了请求发出。所以有两道防线（2026-10-17 安全审计补齐）：
 
@@ -578,7 +579,7 @@ python -m burger_quest smoke --demo   # 只读冒烟（离线）
 通用 AI 不知道麦当劳**此刻**卖什么、多少钱、你有哪张券。本项目的餐品、价格、优惠券、营养全部来自官方 MCP 实时返回，且带完整审计链路；同时把「选择困难」包装成 RPG 任务，输出可直接执行、可分享。
 
 **Q4：MCP 用在了哪些环节，调用量会不会很大？**
-一次任务按需调用 10 个在用只读工具中的若干个（7 主链路 + 1 详情回退 + 2 扩展只读）（并非每次全调；口径以代码 `TOOLS_USED` 为准，详见 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) §2）：门店查询 → 菜单骨架 → 价格发现（一次算价同时拿名称+单价）→ 优惠券/营养 → 组合验价。经过去重 + 短 TTL 缓存 + 分工具超时优化，真实模式单任务 17 次 → **7 次**调用、3.5s → **1.8s**（实测对比见 §6）。
+一次任务按需调用 11 个在用只读工具中的若干个（7 主链路 + 1 详情回退 + 3 扩展只读）（并非每次全调；口径以代码 `TOOLS_USED` 为准，详见 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) §2）：门店查询 → 菜单骨架 → 价格发现（一次算价同时拿名称+单价）→ 优惠券/营养 → 组合验价。经过去重 + 短 TTL 缓存 + 分工具超时优化，真实模式单任务 17 次 → **7 次**调用、3.5s → **1.8s**（实测对比见 §6）。
 
 **Q5：为什么不能下单？**
 MVP 刻意只读：`create-order` 等具有真实资金/库存影响的工具在 `TOOLS_RESERVED` 中显式预留但未接入——生成方案供用户确认，比「一键下单」更适合参赛演示的边界。

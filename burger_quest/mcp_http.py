@@ -98,6 +98,7 @@ from .mcp_base import (
     adapt_meal_detail,
     adapt_meals,
     adapt_nutrition,
+    adapt_points,
     adapt_price,
     adapt_stores,
     adapt_time,
@@ -107,7 +108,7 @@ from .mcp_base import (
     _as_list,
     _first,
 )
-from .models import CouponQuery
+from .models import CouponQuery, PointsAccount
 
 MCD_MCP_URL = "https://mcp.mcd.cn"
 DEFAULT_TIMEOUT = 30.0  # 默认单次调用外层等待（基线实测：最慢单次 663ms，30s 充裕）
@@ -790,6 +791,14 @@ class HttpMCPClient(MCPClient):
 
     def my_coupons(self):
         return adapt_coupons(self._call("query-my-coupons", {}), source="my")
+
+    def my_account(self) -> PointsAccount:
+        """query-my-account（只读）-> 积分账户。
+
+        安全：适配器丢弃 accountId（账户标识），只保留积分数值；
+        数值字段缺失时为 None，由上层显示「未知」。
+        """
+        return adapt_points(self._call("query-my-account", {}, purpose="points_account"))
 
     # -- 第一阶段扩展（2026-10-18）：活动日历 + 可领券（均只读） --------------
 

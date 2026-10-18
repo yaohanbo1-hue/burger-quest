@@ -346,6 +346,8 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             store = (qs.get("store_code") or [""])[0].strip() or None
             self._send_json(self._app.coupons(store))
+        elif path == "/api/account":
+            self._send_json(self._app.account())
         else:
             self._send_json({"error": "not-found"}, status=404)
 
@@ -712,6 +714,25 @@ class WebApp:
             ],
             "combo_price": combo,
             "reconfigure_result": recon,
+        }
+
+    def account(self) -> dict:
+        """积分账户（GET /api/account）：只返回积分数值，**不含 accountId**。"""
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        try:
+            with self._client() as client:
+                acc = client.my_account()
+        except MCPError as e:
+            return {"state": "error", "error": str(e), "generated_at": now}
+        return {
+            "state": "ok" if acc.available is not None else "unknown",
+            "generated_at": now,
+            "available": acc.available,
+            "accumulative": acc.accumulative,
+            "used": acc.used,
+            "expiring_next_month": acc.expiring_next_month,
+            "currency": acc.currency,
+            "unknown_fields": list(acc.unknown_fields),
         }
 
     def progress_lines(self, result) -> list:

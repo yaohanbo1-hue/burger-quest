@@ -228,4 +228,4 @@ def test_tools_lists():
     assert "query-meal-detail" in mb.TOOLS_USED
     assert "create-order" in mb.TOOLS_RESERVED
     assert "delivery-query-addresses" in mb.TOOLS_RESERVED
-    assert len(mb.TOOLS_USED) == 10  # 8 主链路/回退 + 2 第一阶段扩展（campaign/available）
+    assert len(mb.TOOLS_USED) == 11  # 8 主链路/回退 + 3 扩展只读（campaign/available/account）
