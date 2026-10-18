@@ -61,6 +61,22 @@
     </form>
   </section>
 
+  <section class="panel" aria-labelledby="h-tools">
+    <h2 id="h-tools">工具箱（全部只读）</h2>
+    <div class="actions">
+      <button type="button" id="btn-campaign" class="btn">麦门限时委托</button>
+      <button type="button" id="btn-coupons" class="btn">优惠券猎人</button>
+    </div>
+    <label class="field">
+      <span class="label">套餐编码（查看真实组成 / 可替换项）</span>
+      <input id="detail_code" type="text" inputmode="numeric" placeholder="例如 9900011121">
+    </label>
+    <div class="actions">
+      <button type="button" id="btn-detail" class="btn">查看套餐装备</button>
+    </div>
+    <div id="tools-out" class="result-body"></div>
+  </section>
+
   <section class="panel" id="stores-panel" aria-labelledby="h-stores" hidden>
     <h2 id="h-stores">门店结果</h2>
     <div id="stores-body"></div>

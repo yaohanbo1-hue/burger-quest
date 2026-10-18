@@ -63,9 +63,8 @@ CONTRACT_STATUS = {
     # 2026-10-18 第一阶段新增（只读）
     "campaign-calendar": {"real": "2026-10-18 实测返回 2026-10 月 14 个日期段 / 28 条活动（Markdown 文本）"},
     "available-coupons": {
-        "real": None,
-        "blocked": "2026-10-18 实测官方返回 data=null（声明为 array），MCP SDK structured content 校验失败；"
-                   "账户无可领券或官方结构异常，无法确认真实有券时的返回",
+        "real": "2026-10-18 裸 HTTP 实测：无券时官方返回 code=499 + data=null（语义化空态，非错误），"
+                "已按 empty 分类并展示；有券账户的列表结构仍未验证",
     },
 }
 

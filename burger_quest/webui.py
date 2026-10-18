@@ -18,6 +18,7 @@ partial / permission / connection / rate_limited。
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import threading
@@ -339,6 +340,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self._app.progress_summary())
         elif path == "/api/healthz":
             self._send_json({"ok": True})
+        elif path == "/api/campaign":
+            self._send_json(self._app.campaign())
+        elif path == "/api/coupons":
+            qs = parse_qs(urlparse(self.path).query)
+            store = (qs.get("store_code") or [""])[0].strip() or None
+            self._send_json(self._app.coupons(store))
         else:
             self._send_json({"error": "not-found"}, status=404)
 
@@ -356,6 +363,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_stores(body)
         elif path == "/api/card":
             self._handle_card(body)
+        elif path == "/api/detail":
+            self._handle_detail(body)
         else:
             self._send_json({"error": "not-found"}, status=404)
 
@@ -433,6 +442,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body_bytes)
 
+    def _handle_detail(self, body: dict):
+        """POST /api/detail：套餐装备（真实组成/替换项/特制项 + 单品组合算价）。"""
+        code = str(body.get("code") or "").strip()
+        store_code = str(body.get("store_code") or "").strip()
+        if not code or not store_code:
+            self._send_json({"state": "error", "error": "缺少 code 或 store_code"}, status=400)
+            return
+        raw = body.get("reconfigure")
+        replacements = None
+        if isinstance(raw, dict):
+            try:
+                replacements = {int(k): str(v) for k, v in raw.items()}
+            except (TypeError, ValueError):
+                self._send_json({"state": "error", "error": "reconfigure 需为 {组序号: 选项编码}"}, status=400)
+                return
+        self._send_json(self._app.meal_detail(code, store_code, replacements))
+
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
@@ -497,6 +523,174 @@ class WebApp:
         city, keyword = _split_city(query or "")
         with self._client() as client:
             return client.nearby_stores(keyword, city=city, be_type=1)
+
+    def campaign(self) -> dict:
+        """限时委托（GET /api/campaign）：只读官方活动日历。
+
+        空结果 / 解析失败 / 服务不可用三种状态必须可区分（state 字段）。
+        """
+        from . import campaign as campaign_mod
+
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        try:
+            with self._client() as client:
+                items = client.campaign_calendar()
+        except MCPError as e:
+            return {"state": "error", "error": str(e), "generated_at": now, "counts": {}, "campaigns": []}
+        return {
+            "state": "ok" if items else "empty",
+            "generated_at": now,
+            "source": "campaign-calendar",
+            "counts": campaign_mod.summarize(items),
+            "campaigns": [
+                {
+                    "date": c.date,
+                    "title": c.title,
+                    "content": c.content,
+                    "image_url": c.image_url,
+                    "status": c.status,
+                }
+                for c in items
+            ],
+        }
+
+    @staticmethod
+    def _coupon_dict(c) -> dict:
+        return {
+            "id": c.id,
+            "name": c.name,
+            "threshold_cents": c.threshold_cents,
+            "value_cents": c.value_cents,
+            "percent": c.percent,
+            "expires_at": c.raw.get("expiresAt") or c.raw.get("expireTime") or c.raw.get("validEndTime"),
+            "source": c.source,
+        }
+
+    def coupons(self, store_code: Optional[str] = None) -> dict:
+        """优惠券猎人（GET /api/coupons）：三类券分开，状态不混用。"""
+        from .mcp_base import scene_for_mode
+
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        sections: list[dict] = []
+        try:
+            with self._client() as client:
+                q = client.available_coupons()
+                sections.append(
+                    {
+                        "name": "可领取（麦麦省）",
+                        "state": q.state,
+                        "note": q.note,
+                        "coupons": [self._coupon_dict(c) for c in q.coupons],
+                    }
+                )
+                try:
+                    mine = client.my_coupons()
+                    sections.append(
+                        {"name": "我的卡包", "state": "ok", "note": "", "coupons": [self._coupon_dict(c) for c in mine]}
+                    )
+                except MCPError as e:
+                    sections.append({"name": "我的卡包", "state": "error", "note": str(e), "coupons": []})
+                if store_code:
+                    try:
+                        store_items = client.store_coupons(scene_for_mode("takeaway", store_code))
+                        sections.append(
+                            {
+                                "name": f"门店 {store_code} 适用",
+                                "state": "ok",
+                                "note": "",
+                                "coupons": [self._coupon_dict(c) for c in store_items],
+                            }
+                        )
+                    except MCPError as e:
+                        sections.append({"name": f"门店 {store_code} 适用", "state": "error", "note": str(e), "coupons": []})
+                else:
+                    sections.append(
+                        {
+                            "name": "门店适用",
+                            "state": "skipped",
+                            "note": "未提供门店编码，未查询（避免把卡包券误当成该门店可用券）",
+                            "coupons": [],
+                        }
+                    )
+        except MCPError as e:
+            return {"state": "error", "error": str(e), "generated_at": now, "sections": sections}
+        return {"state": "ok", "generated_at": now, "sections": sections}
+
+    def meal_detail(self, code: str, store_code: str, reconfigure: Optional[dict] = None) -> dict:
+        """套餐装备（POST /api/detail）：真实组成/替换项/特制项 + 单品组合算价。
+
+        边界：不提供「套餐改价」——官方 calculate-price 无替换参数；
+        reconfigure 走单品组合官方算价，响应里用 pricing_mode 明确区分。
+        """
+        from . import mealconfig
+        from .mcp_base import scene_for_mode
+        from .models import MenuItem, PlanItem
+
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        try:
+            with self._client() as client:
+                scene = scene_for_mode("takeaway", store_code)
+                detail = client.meal_detail(scene, code)
+                groups = mealconfig.parse_detail(detail)
+                combo: Optional[dict] = None
+                quote = client.calculate_price(
+                    scene,
+                    [PlanItem(MenuItem(code=code, name=detail.get("name") or "", category=""), 1)],
+                    [],
+                    purpose="meal_detail_combo_price",
+                )
+                combo = {"ok": quote.ok, "total_cents": quote.total_cents, "message": quote.message}
+                recon: Optional[dict] = None
+                if reconfigure:
+                    items, notes = mealconfig.apply_replacements(groups, reconfigure)
+                    if items:
+                        q2 = client.calculate_price(
+                            scene,
+                            [PlanItem(MenuItem(code=c, name=n, category=""), qty) for c, n, qty in items],
+                            [],
+                            purpose="meal_reconfigure_price",
+                        )
+                        recon = {
+                            "notes": notes,
+                            "items": [{"code": c, "name": n, "qty": qty} for c, n, qty in items],
+                            "ok": q2.ok,
+                            "total_cents": q2.total_cents,
+                            "message": q2.message,
+                        }
+                    else:
+                        recon = {"notes": notes, "items": [], "ok": False, "total_cents": None, "message": "重配后没有可用单品"}
+        except MCPError as e:
+            return {"state": "error", "error": str(e), "generated_at": now}
+        return {
+            "state": "ok" if groups else "empty",
+            "generated_at": now,
+            "source": "query-meal-detail",
+            "code": code,
+            "name": detail.get("name"),
+            "store_code": store_code,
+            "pricing_mode": "single_item_combination",  # 单品组合价，非套餐改价
+            "groups": [
+                {
+                    "index": g.index,
+                    "name": g.name,
+                    "quantity": g.quantity,
+                    "choices": [
+                        {
+                            "code": c.code,
+                            "name": c.name,
+                            "is_default": c.is_default,
+                            "diff_text": c.diff_text,
+                            "modifiable": c.modifiable,
+                            "modifications": c.modifications,
+                        }
+                        for c in g.choices
+                    ],
+                }
+                for g in groups
+            ],
+            "combo_price": combo,
+            "reconfigure_result": recon,
+        }
 
     def progress_lines(self, result) -> list:
         """本地虚拟进度结算（opt-in；未启用时返回说明行）。"""

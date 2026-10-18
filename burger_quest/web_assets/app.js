@@ -301,6 +301,127 @@
   function currentText() { return $("text").value.trim(); }
   function currentStore() { return $("store_code").value.trim(); }
 
+  // ---------- 工具箱：限时委托 / 优惠券猎人 / 套餐装备（2026-10-18，全部只读） ----------
+  function toolsBusy(msg) {
+    var out = $("tools-out");
+    clear(out);
+    out.appendChild(el("p", null, msg));
+  }
+
+  function loadCampaign() {
+    toolsBusy("正在查询官方活动日历…");
+    fetch("/api/campaign").then(function (r) { return r.json(); }).then(function (d) {
+      var out = $("tools-out");
+      clear(out);
+      if (d.state === "error") {
+        out.appendChild(stateBanner("connection", d.error || "活动接口不可用"));
+        out.appendChild(el("p", "hint", "降级：未展示任何活动（不编造）"));
+        return;
+      }
+      if (d.state === "empty") {
+        out.appendChild(stateBanner("no_result", "官方返回空活动列表（可能是当月暂无活动）"));
+        return;
+      }
+      var counts = d.counts || {};
+      out.appendChild(el("h3", null, "麦门限时委托 · 进行中 " + (counts.live || 0) + " · 未来 " + (counts.upcoming || 0) + " · 往期 " + (counts.past || 0)));
+      out.appendChild(el("p", "hint", "数据更新时间 " + d.generated_at + " · 来源 campaign-calendar（只读）"));
+      out.appendChild(el("p", "hint", "查看活动不等于参加活动：不报名、不预约、不领奖。"));
+      ["live", "upcoming", "past"].forEach(function (key) {
+        var label = key === "live" ? "进行中" : key === "upcoming" ? "未来" : "往期";
+        var list = (d.campaigns || []).filter(function (c) { return c.status === key; });
+        if (!list.length) return;
+        out.appendChild(el("h4", null, label + "（" + list.length + "）"));
+        var ul = el("ul", "store-list");
+        list.forEach(function (c) {
+          var li = el("li");
+          li.appendChild(el("div", null, c.date + " · " + c.title));
+          if (c.content) li.appendChild(el("div", "addr", c.content.split("\n")[0].slice(0, 80)));
+          ul.appendChild(li);
+        });
+        out.appendChild(ul);
+      });
+    }).catch(function () { toolsBusy("本地服务无响应"); });
+  }
+
+  function loadCoupons() {
+    var store = currentStore();
+    toolsBusy("正在查询三类券…");
+    fetch("/api/coupons" + (store ? "?store_code=" + encodeURIComponent(store) : ""))
+      .then(function (r) { return r.json(); }).then(function (d) {
+        var out = $("tools-out");
+        clear(out);
+        if (d.state === "error") { out.appendChild(stateBanner("connection", d.error || "券查询失败")); return; }
+        (d.sections || []).forEach(function (s) {
+          out.appendChild(el("h4", null, s.name));
+          if (s.state === "error") {
+            out.appendChild(stateBanner("connection", s.note || "查询失败"));
+          } else if (s.state === "unknown") {
+            out.appendChild(stateBanner("partial", "状态未知（不等于 0 张）：" + (s.note || "")));
+          } else if (s.state === "skipped") {
+            out.appendChild(el("p", "hint", s.note || "未查询"));
+          } else if (s.state === "empty") {
+            out.appendChild(el("p", null, "✅ 官方明确：暂无可领取券 —— " + (s.note || "")));
+          } else if (!(s.coupons || []).length) {
+            out.appendChild(el("p", "hint", "官方返回空列表（不代表账户一定没有券）"));
+          } else {
+            var ul = el("ul", "store-list");
+            s.coupons.forEach(function (c) {
+              var bits = [c.name || c.id];
+              if (c.threshold_cents) bits.push("门槛 ¥" + (c.threshold_cents / 100).toFixed(2));
+              bits.push(c.expires_at ? "有效期至 " + c.expires_at : "有效期未知");
+              var li = el("li");
+              li.appendChild(el("div", null, bits.join(" · ")));
+              ul.appendChild(li);
+            });
+            out.appendChild(ul);
+          }
+        });
+        out.appendChild(el("p", "hint", "只读：不领取、不绑定、不修改账户。数据更新时间 " + d.generated_at));
+      }).catch(function () { toolsBusy("本地服务无响应"); });
+  }
+
+  function loadDetail() {
+    var code = ($("detail_code").value || "").trim();
+    var store = currentStore();
+    if (!code) { $("detail_code").focus(); return; }
+    if (!store) { alert("请先填写门店编码（套餐详情需要门店上下文）"); return; }
+    toolsBusy("正在查询套餐组成…");
+    fetch("/api/detail", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code, store_code: store })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      var out = $("tools-out");
+      clear(out);
+      if (d.state === "error") { out.appendChild(stateBanner("connection", d.error || "详情查询失败")); return; }
+      if (d.state === "empty") { out.appendChild(stateBanner("no_result", "该编码未返回套餐组成（可能是单品）")); return; }
+      out.appendChild(el("h3", null, "套餐装备 · " + (d.name || code)));
+      out.appendChild(el("p", "hint", "来源 query-meal-detail（只读）· 数据更新时间 " + d.generated_at));
+      (d.groups || []).forEach(function (g) {
+        out.appendChild(el("h4", null, g.index + ". " + g.name + " ×" + g.quantity));
+        var ul = el("ul", "store-list");
+        (g.choices || []).forEach(function (c) {
+          var li = el("li");
+          li.appendChild(el("div", null, c.name + "（" + c.code + "）" + (c.is_default ? "（默认）" : "") + (c.diff_text ? "，" + c.diff_text : "")));
+          if (c.modifications && c.modifications.length) {
+            var names = [];
+            c.modifications.forEach(function (m) {
+              (m.values || []).forEach(function (v) { names.push(v.name + (v.selected_quantity ? "（已选）" : "")); });
+            });
+            if (names.length) li.appendChild(el("div", "addr", "特制选项（仅展示，不参与算价）：" + names.join(" / ")));
+          }
+          ul.appendChild(li);
+        });
+        out.appendChild(ul);
+      });
+      if (d.combo_price) {
+        out.appendChild(el("p", null, d.combo_price.ok
+          ? "套餐参考价：¥" + (d.combo_price.total_cents / 100).toFixed(2) + "（calculate-price 权威）"
+          : "套餐参考价：官方未返回可用总价（明确失败，不估算）"));
+      }
+      out.appendChild(el("p", "hint", "说明：官方算价接口未提供套餐替换参数，本页不提供「套餐改价」；如需对比可走 CLI 的单品组合（--reconfigure），其价格是单品组合官方报价。"));
+    }).catch(function () { toolsBusy("本地服务无响应"); });
+  }
+
   // ---------- 事件绑定 ----------
   document.addEventListener("DOMContentLoaded", function () {
     refreshStatus();
@@ -313,6 +434,9 @@
     });
     $("btn-stores").addEventListener("click", queryStores);
     $("btn-progress").addEventListener("click", showProgress);
+    $("btn-campaign").addEventListener("click", loadCampaign);
+    $("btn-coupons").addEventListener("click", loadCoupons);
+    $("btn-detail").addEventListener("click", loadDetail);
     // 常用句式快捷填充（2026-10-18）：点击填入需求框，用户可继续修改再提交
     document.querySelectorAll("[data-fill]").forEach(function (btn) {
       btn.addEventListener("click", function () {

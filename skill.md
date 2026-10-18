@@ -142,7 +142,7 @@ python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园"
 ## 8. 边界（红线）
 
 - ❌ 不编造餐品、价格、优惠券、门店、活动、库存状态；
-- ❌ 不自动下单：`create-order` / `cancel-order` / `auto-bind-coupons` / `available-coupons` / `draw-lottery` 等写操作或账户状态变更工具，即使用户要求也不调用——MVP 只读，下单由用户本人在官方渠道完成；
+- ❌ 不自动下单：`create-order` / `cancel-order` / `auto-bind-coupons` / `draw-lottery` 等写操作或账户状态变更工具（`available-coupons` 仅只读查询，不领取），即使用户要求也不调用——MVP 只读，下单由用户本人在官方渠道完成；
 - ❌ 不把 MCP Token 写进任何文件或输出，不向用户索要 Token；
 - ❌ 不把离线演示数据冒充实时查询结果；
 - ❌ 不提供医疗/营养专业建议（营养数据仅供参考）；

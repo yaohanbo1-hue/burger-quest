@@ -191,8 +191,11 @@ class MockMCPClient(MCPClient):
         ]
 
     def available_coupons(self):
+        from .models import CouponQuery
+
         self._record("available-coupons", {}, True)
-        return adapt_coupons(self.data.get("available_coupons", []), source="available")
+        # 演示数据的语义：与官方 code=499 等价 —— 「明确无券」，不是「未知」
+        return CouponQuery(state="empty", note="演示数据：官方语义为「暂无可领取的优惠券」")
 
     def list_nutrition_foods(self):
         self._record("list-nutrition-foods", {}, True)

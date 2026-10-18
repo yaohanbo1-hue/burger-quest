@@ -52,6 +52,7 @@ from typing import Any, Optional
 from .models import (
     Campaign,
     Coupon,
+    CouponQuery,
     MenuItem,
     NutritionItem,
     PriceQuote,
@@ -321,9 +322,12 @@ class MCPClient(ABC):
         """
 
     @abstractmethod
-    def available_coupons(self) -> list[Coupon]:
-        """available-coupons（只读）-> 当前可领取的麦麦省优惠券。
+    def available_coupons(self) -> CouponQuery:
+        """available-coupons（只读）-> CouponQuery（区分 ok / empty / unknown）。
 
+        实测：无券时官方返回 code=499 + data=null（业务语义是「无券」），
+        与 query-my-coupons 的 success:true + coupons:[] 等价；必须区分，
+        不能把「未知」当成「0 张券」。
         第一阶段只查询展示，**绝不调用 auto-bind-coupons、绝不领取**。
         """
 

@@ -93,7 +93,9 @@ class StubLiveClient(MCPClient):
         return []
 
     def available_coupons(self):
-        return []
+        from burger_quest.models import CouponQuery
+
+        return CouponQuery(state="empty", note="桩：无券")
 
     def list_nutrition_foods(self):
         return []

@@ -43,7 +43,7 @@
 
 ### 预留但 MVP 不主动调用的工具
 
-`available-coupons` / `auto-bind-coupons`（领券动作，会改变用户账户状态）、`delivery-create-address`（写操作）、`create-order` / `cancel-order` / `query-order`（订单操作）、`mall-*` / `query-lottery-info` / `draw-lottery`（商城与抽奖，涉及积分扣减）。这些工具具有实际影响，按比赛要求「真实下单或其他具有实际影响的操作必须等待用户明确确认」，本仓库不接入，仅在代码 `TOOLS_RESERVED` 中登记边界。
+`auto-bind-coupons`（领券动作，会改变用户账户状态；`available-coupons` 已于 2026-10-18 以**只读查询**接入，不领取）、`delivery-create-address`（写操作）、`create-order` / `cancel-order` / `query-order`（订单操作）、`mall-*` / `query-lottery-info` / `draw-lottery`（商城与抽奖，涉及积分扣减）。这些工具具有实际影响，按比赛要求「真实下单或其他具有实际影响的操作必须等待用户明确确认」，本仓库不接入，仅在代码 `TOOLS_RESERVED` 中登记边界。
 
 ## 3. 调用链（一次完整任务，联调实测）
 

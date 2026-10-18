@@ -465,10 +465,10 @@ def _cmd_coupons(args) -> int:
         with client:
             # A. 可领取（available-coupons）——只查不领
             try:
-                available = client.available_coupons()
-                sections.append({"name": "可领取（麦麦省）", "state": "ok", "items": available, "note": ""})
+                q = client.available_coupons()
+                sections.append({"name": "可领取（麦麦省）", "state": q.state, "items": q.coupons, "note": q.note})
             except MCPError as e:
-                sections.append({"name": "可领取（麦麦省）", "state": "unknown", "items": [], "note": str(e)})
+                sections.append({"name": "可领取（麦麦省）", "state": "error", "items": [], "note": str(e)})
 
             # B. 我的卡包
             try:
@@ -500,12 +500,16 @@ def _cmd_coupons(args) -> int:
 
     for s in sections:
         print(f"【{s['name']}】")
-        if s["state"] == "unknown":
-            print(f"  ⚠️ 状态未知：{s['note'][:160]}")
+        if s["state"] == "error":
+            print(f"  ❌ 查询失败：{s['note'][:160]}")
+        elif s["state"] == "unknown":
+            print(f"  ⚠️ 状态未知（不等于 0 张）：{s['note'][:160]}")
         elif s["state"] == "skipped":
             print(f"  ℹ️ {s['note']}")
+        elif s["state"] == "empty":
+            print(f"  ✅ 官方明确：0 张可领取券 —— {s['note'] or '暂无可领取的优惠券'}")
         elif not s["items"]:
-            print("  （官方返回为空——不排除有券，只是本次查询未返回）")
+            print("  （官方返回空列表：本次查询未返回券，不代表账户一定没有）")
         else:
             for c in s["items"]:
                 bits = [c.name or c.id]

@@ -116,6 +116,24 @@ class Coupon:
 
 
 @dataclass(frozen=True)
+class CouponQuery:
+    """可领券查询结果：显式区分「真实列表 / 官方明确无券 / 语义未知」。
+
+    2026-10-18 裸 HTTP 实测（绕过 SDK 校验）：
+      available-coupons 无券时返回 {"success": false, "code": 499,
+        "message": "No coupons available", "data": null}
+      query-my-coupons 无券时返回 {"success": true, "data": {"coupons": []}}
+    两者语义都是「无券」，但一个用业务错误码、一个用空数组——必须区分，
+    不能把「语义未知」显示成「0 张券」。
+    """
+
+    state: str  # ok=有列表｜empty=官方明确无券｜unknown=有返回但语义无法确认
+    coupons: list["Coupon"] = field(default_factory=list)
+    note: str = ""
+    raw_summary: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
 class NutritionItem:
     name: str
     calories_kcal: Optional[float] = None

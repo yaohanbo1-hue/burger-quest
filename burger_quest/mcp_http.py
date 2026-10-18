@@ -107,6 +107,7 @@ from .mcp_base import (
     _as_list,
     _first,
 )
+from .models import CouponQuery
 
 MCD_MCP_URL = "https://mcp.mcd.cn"
 DEFAULT_TIMEOUT = 30.0  # 默认单次调用外层等待（基线实测：最慢单次 663ms，30s 充裕）
@@ -808,35 +809,86 @@ class HttpMCPClient(MCPClient):
             text = json.dumps(text, ensure_ascii=False)
         return parse_campaign_text(text)
 
-    def available_coupons(self):
-        """available-coupons（只读）-> 可领取的麦麦省券列表。
+    def _call_raw(self, tool: str, arguments: dict, timeout: float = 30.0):
+        """底层调用：绕过 SDK 的 structured content 校验，返回原始 CallToolResult。
 
-        **只查询，绝不领取**（不调用 auto-bind-coupons）。
-        实测：官方声明 data 为 array，但无券账户返回 data=null，MCP SDK 会因
-        structured content 校验失败抛 RuntimeError。此时如实上报「结构不符合
-        声明、无法确认」，而不是假装成空列表——字段缺失必须明示未知。
+        仅用于「官方 outputSchema 声明与真实返回不一致」的工具：
+        available-coupons 无券时返回 data=null（声明为 array），SDK 会在
+        call_tool 内部先抛 RuntimeError，导致拿不到原始结构。这里用
+        send_request 直接取原始结果，由调用方按业务语义分类。
         """
-        try:
-            raw = self._call("available-coupons", {}, purpose="coupon_pool")
-        except MCPError as e:
-            if "structured content" in str(e):
+        from mcp_types import CallToolRequest, CallToolRequestParams, CallToolResult
+
+        async def _invoke():
+            session = self._session
+            if session is None:
+                raise MCPError(tool, "MCP 会话未建立：请先 connect()，或使用 with HttpMCPClient(...) 上下文")
+            return await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name=tool, arguments=arguments)),
+                CallToolResult,
+            )
+
+        result = self._submit(_invoke(), tool=tool, timeout=timeout)
+        self._record(tool, arguments, True, note="raw call（绕过 structured 校验）")
+        return result
+
+    def available_coupons(self) -> CouponQuery:
+        """available-coupons（只读）-> CouponQuery（ok / empty / unknown）。
+
+        2026-10-18 裸 HTTP 实测（绕过 SDK）确认无券时的真实返回：
+          {"success": false, "code": 499,
+           "message": "No coupons available", "data": null}
+        content 文本「暂无可领取的优惠券」。
+        → code=499 是官方表达「无可领取券」的业务码，**不是错误**；
+          与 query-my-coupons 的 success:true + coupons:[] 语义等价。
+        分类：
+          A. success=false + code=499 / "No coupons available" → empty（明确无券）
+          B. success=true + data=list → ok
+          C. success=true + data=null → unknown（有返回但语义无法确认）
+          D. 其他 success=false → 抛 MCPError（真实业务错误）
+        网络/401/429/5xx 由 _submit 的既有异常体系抛出（不在此吞掉）。
+        """
+        result = self._call_raw("available-coupons", {})
+        payload = getattr(result, "structured_content", None)
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            msg = str(payload.get("message") or "")
+            summary = {"success": payload.get("success"), "code": code, "message": msg[:80]}
+            if payload.get("success") is False:
+                if code == 499 or "No coupons available" in msg:
+                    return CouponQuery(
+                        state="empty",
+                        note="官方明确返回：暂无可领取的优惠券（code=499 No coupons available）",
+                        raw_summary=summary,
+                    )
                 raise MCPError(
                     "available-coupons",
-                    "官方返回结构不符合其声明的 Schema（data 为 null，期望 array）："
-                    "无法确认是否有可领取优惠券。可能是账户当前无可领券，或官方接口返回异常；"
-                    "本工具只读，未执行任何领取动作。",
-                ) from e
-            raise
-        except RuntimeError as e:
-            if "structured content" in str(e):
-                raise MCPError(
-                    "available-coupons",
-                    "官方返回结构不符合其声明的 Schema（data 为 null，期望 array）："
-                    "无法确认是否有可领取优惠券。可能是账户当前无可领券，或官方接口返回异常；"
-                    "本工具只读，未执行任何领取动作。",
-                ) from e
-            raise
-        return adapt_coupons(raw, source="available")
+                    f"官方返回业务错误（code={code}）：{msg or '未知错误'}",
+                    code=code if isinstance(code, int) else None,
+                )
+            data = payload.get("data")
+            if data is None:
+                return CouponQuery(
+                    state="unknown",
+                    note="官方返回 success=true 但 data=null：无法确认是否有可领取券",
+                    raw_summary=summary,
+                )
+            return CouponQuery(state="ok", coupons=adapt_coupons(data, source="available"), raw_summary=summary)
+
+        # 无 structuredContent：退回文本判定（官方 content 为 Markdown）
+        text = ""
+        for blk in getattr(result, "content", None) or []:
+            chunk = getattr(blk, "text", None)
+            if chunk:
+                text += chunk
+        summary = {"structured": False, "text_head": text[:60].replace("\n", " ")}
+        if "暂无可领取" in text or "暂无" in text:
+            return CouponQuery(state="empty", note="官方文本明示：暂无可领取的优惠券", raw_summary=summary)
+        return CouponQuery(
+            state="unknown",
+            note="官方未返回 structuredContent，文本无法判定券状态",
+            raw_summary=summary,
+        )
 
     def list_nutrition_foods(self):
         return adapt_nutrition(self._call("list-nutrition-foods", {}))
