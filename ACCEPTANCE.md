@@ -1,22 +1,23 @@
 # 候选版本总验收报告
 
-> 验收时间：2026-10-18（第 8 项「候选版本总验收」+ 当日最终审计纠偏）
+> 验收时间：2026-10-18（第 8 项「候选版本总验收」+ 当日最终审计纠偏）；**2026-10-19 复核刷新**（支线 Skill 扩容 + CLI 子系统命令补测试，数字为当日复跑值）
 > 验收对象：`main` @ `c690075`（本轮审计完成后的 HEAD，即「验收记录更新提交」）
 > 提交构成：`a740d74` = 本轮审计修复提交（6 条线索复核后的文档纠偏，CI run 39083738429，7/7 绿）；`c690075` = 验收记录更新提交（验收证据引用对齐，CI run 39084016998，7/7 绿）。两个提交均为纯文档修改，无代码/测试变更；其后新增的纯文档维护提交同样不动代码/测试，最新提交的 CI 状态以 GitHub Actions 页为准。
+> 2026-10-19 复核变更：`SKILL.md` 支线任务扩容（15 个只读工具实测接入）+ `tests/test_cli_commands.py` 16 例（detail/account/campaign/coupons 四命令，cli.py 覆盖率 52% → 84%，总覆盖率 → 89.97%）+ `tests/test_tool_contract.py` 三层注册表互斥与支线台账守卫；`MCP_TOOL_SELECTION.md` 三处实测结论纠偏（Schema 非空 / `catRuleIds=1>4` 餐品券 / 派对链已贯通）。
 > 验收方式：**全部本地复跑 + CI 实证**，不引用未经本次验证的数字
 
 ## 结论：✅ 通过，可作候选版本交付
 
 | # | 验收项 | 结果 | 证据 |
 | --- | --- | --- | --- |
-| 1 | 全量测试 | ✅ 657 passed | 本地 `pytest -q`（58.6s） |
-| 2 | 覆盖率 | ✅ 91.44% ≥ 85% 阈值 | `--cov-fail-under=85` 实跑 |
+| 1 | 全量测试 | ✅ 722 passed | 本地 `pytest -q`（94.8s，2026-10-19 复跑） |
+| 2 | 覆盖率 | ✅ 89.97% ≥ 85% 阈值 | `--cov-fail-under=85` 实跑 |
 | 3 | CI 全流水线 | ✅ 7/7 job 绿 | run 39083738429（对 `a740d74`：Windows 3.11/3.12 + Linux 3.10/3.11/3.12/3.13 + Quality gates，共 7 个 job） |
 | 4 | 类型检查 | ✅ mypy 0 error | 本地复跑（曾 45） |
 | 5 | 安全扫描 | ✅ bandit 0 finding | 本地复跑（曾 12；2 处 `nosec` 均带理由） |
 | 6 | 依赖漏洞 | ✅ pip-audit 无已知漏洞 | 本地复跑 |
 | 7 | 空白检查 | ✅ 通过 | `git diff --check HEAD~`（CI 同口径） |
-| 8 | 文档一致性 | ✅ 通过 | README 数字同步为 657/91.44%；skill.md 与代码一致性由 `test_skill_docs.py` 在套件内强制；其余文档无陈旧计数 |
+| 8 | 文档一致性 | ✅ 通过 | README 数字同步为 722/89.97%；SKILL.md 与代码一致性由 `test_skill_docs.py` 在套件内强制；其余文档无陈旧计数 |
 | 9 | 敏感扫描 | ✅ 0 真实命中 | CI 同口径正则 + 手机号形态全仓扫描；1 个命中为**已验证误报**（见下） |
 | 10 | 干净环境（发布包） | ✅ 19/19 | 异路径解压 + Info-ZIP 最坏情况双路验证 |
 | 11 | 真实/模拟状态分离 | ✅ 有据可查 | MCP_INTEGRATION.md §3.12 三态台账（10 工具逐一标注） |
@@ -25,15 +26,15 @@
 ## 1. 测试与质量门禁（本地复跑实录）
 
 ```
-pytest -q --cov                        657 passed · 91.44%（阈值 85%）
+pytest -q --cov                        722 passed · 89.97%（阈值 85%）
 mypy burger_quest                      Success: no issues found in 20 source files
 bandit -r burger_quest                 0 finding（B105 nosec ×3 均带理由）
 pip-audit                              No known vulnerabilities found
 git diff --check HEAD~                 通过
 ```
 
-逐文件覆盖率低位项（已登记技术债，见 TECH_DEBT.md §2）：
-doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%。
+逐文件覆盖率低位项（2026-10-19 复跑值；doctor/smoke 已登记技术债，见 TECH_DEBT.md §2）：
+doctor 83% / smoke 87% / achievements 87% / cli 84% / mcp_http 87% / webui 79%。
 
 ## 2. 敏感扫描说明（1 个已验证误报）
 
@@ -66,7 +67,7 @@ doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%�
 
 ## 4. 真实与模拟状态分离
 
-**铁律执行情况**：所有 657 个测试均用假会话（mock/录制响应）驱动，
+**铁律执行情况**：所有 722 个测试均用假会话（mock/录制响应）驱动，
 **不访问网络也能全绿**；真实 Token 从未进入代码、测试或产物。
 
 真实服务验证（2026-10-13/17，官方 Token，记录于 MCP_INTEGRATION.md §3.5/§3.12）：
@@ -75,7 +76,7 @@ doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%�
 | --- | --- |
 | 官方 Schema 快照（35 工具 verbatim） | ✅ 2026-10-17 拉取落盘 |
 | 9/10 在用工具真实调用 | ✅ 含 401/429 还原、600010 双字段契约、算价分单位 |
-| ~~`delivery-query-stores`~~ | ⛔ 未验证，2026-10-18 已从项目移除（外送改为明确提示能力边界） |
+| `delivery-query-stores` | ⛔ 未验证（账户无保存地址取不到 `addressId`）；官方 Schema 已确认，登记 `TOOLS_RESERVED` 未接入（2026-10-19 起外送改为明确提示能力边界） |
 | 优惠券真实优惠实效 | ⬜ 账户无可用券；**已验证提交契约**（couponId+couponCode 成对，只传 ID 报 600010），未验证有券时优惠是否真实生效 |
 | 服务端同单多券接受性 | ⬜ per-item 挂载已修（容量守卫），待有券账户验证 |
 
@@ -87,7 +88,7 @@ doctor 83% / smoke 87% / achievements 87% / cli 88% / mcp_http 90% / webui 84%�
 | 交付物 | 位置 |
 | --- | --- |
 | 引擎源码（20 模块，mypy 零 error） | `burger_quest/` |
-| 测试套件（657 例，91.44%） | `tests/` |
+| 测试套件（722 例，89.97%） | `tests/` |
 | Windows 便携发布包（23.7MB + sha256 + 校验 bat） | `dist/`（**gitignore 排除，仅本机验证产物；当前未随仓库公开发布，评审不可从 GitHub 页面下载**） |
 | 发布包构建/验证脚本 | `tools/build_portable.py`、`tools/verify_portable.py`、`tools/portable-constraints.txt` |
 | 性能基线与回归阈值 | `PERFORMANCE.md` + `perf-baseline.json` + `tools/measure_perf.py` |

@@ -17,14 +17,19 @@
 | 服务范围 | 中国大陆地区（不含港澳台） |
 | 官方文档 | <https://github.com/M-China/mcd-mcp-server> |
 
-## 2. 实际使用的工具（7 常规主链路 + 1 详情回退 + 3 扩展只读 + 2 外送专用）
+## 2. 实际使用的工具（引擎 11 只读 + Skill 支线 15 只读 + 9 预留，覆盖官方 35 个）
 
 引擎通过 `burger_quest/mcp_base.py` 的 `MCPClient` 接口调用以下工具。
-**场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 11 个；`TOOLS_RESERVED` 另有 10 个，含外送 2 个与写操作/抽奖 8 个）：
+**场景不同，实际使用的工具并不必然完全相同**（以代码 `TOOLS_USED` 注册表为权威，共 11 个）。
 
-- **11 个在用只读工具**（`TOOLS_USED`）：7 个常规主链路 + 1 个详情回退 + 3 个扩展只读（`campaign-calendar` / `available-coupons` / `query-my-account`，只在对应功能里调用）。常规主链路**并非每个任务都会用到全部**——6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`；外送门店查询未接入，见下）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
+除引擎外，WorkBuddy Skill（`SKILL.md` §10）经 `mcd-mcp` 连接器**直调 15 个支线只读工具**
+（`TOOLS_SKILL_READONLY`，2026-10-19 真实 Token 实测，契约见 §3.15）——两层合计 **26 个只读工具**
++ `TOOLS_RESERVED` 9 个（写操作 7 + 外送链路 2），官方 35 个工具全覆盖、零虚构：
+
+- **11 个引擎在用只读工具**（`TOOLS_USED`）：7 个常规主链路 + 1 个详情回退 + 3 个扩展只读（`campaign-calendar` / `available-coupons` / `query-my-account`，只在对应功能里调用）。常规主链路**并非每个任务都会用到全部**——6 个场景通用（`now-time-info` / `query-meals` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price`）、1 个仅到店场景（`query-nearby-stores`；外送门店查询未接入，见下）、1 个按需回退（`query-meal-detail`，菜单骨架缺名称时补名，实测通常 0 次）；
+- **15 个 Skill 支线只读工具**（`TOOLS_SKILL_READONLY`，**不由引擎调用**）：麦享会宝库（积分/商城/抽奖）、派对据点侦查、团餐公会、冒险日志（历史订单）四条支线；参数契约与实测结果见 §3.15 与 `SKILL.md` §10；
 - **1 个外送专用工具**（`delivery-query-addresses`，登记在 `TOOLS_RESERVED`）：仅外送场景使用，且需要账户已保存配送地址；账户无保存地址时程序明确提示并停止。
-- **已移除**：`delivery-query-stores`（地址→可配送门店）未经真实联调验证（账户无保存地址，取不到 `addressId`），**已从代码中删除**（2026-10-18）。有地址时程序明确提示「外送门店查询能力未接入，请使用官方 App 下单」，不查门店、不发起算价、不伪造外送价格。
+- **预留未接入**：`delivery-query-stores`（地址→可配送门店）官方 Schema 已确认（必填 `beType`+`addressId`），但账户无保存地址、端到端不可用，登记于 `TOOLS_RESERVED`。程序明确提示「外送门店查询能力未接入，请使用官方 App 下单」，不查门店、不发起算价、不伪造外送价格。
 
 | 工具 | 用途 | 在调用链中的位置 |
 | --- | --- | --- |
@@ -37,14 +42,19 @@
 | `query-my-coupons` | 我的卡包优惠券 | 第 5 步，券池来源之二 |
 | `list-nutrition-foods` | 常见餐品营养数据（能量/蛋白质/脂肪/碳水/钠/钙） | 第 6 步，低卡/高蛋白筛选依据 |
 | *（外送专用）* `delivery-query-addresses` | 用户已保存的配送地址（取 addressId/beCode） | 第 2 步，**仅外送场景**；无地址 → 明确说明并停止 |
-| ~~`delivery-query-stores`~~ | — | **已移除**（未验证，见上） |
+| `delivery-query-stores` | 地址→可配送门店（必填 `beType`+`addressId`） | **预留未接入**（账户无保存地址，端到端不可用；§2） |
 
 > 注：`query-nearby-stores` 是**到店场景**的位置查询（`beType=1`）；外送场景的门店来自
 > 已保存地址仅用于提示用户（本项目不做外送门店查询），到店场景用 `query-nearby-stores`，两者不可互相替代。
 
-### 预留但 MVP 不主动调用的工具
+### 预留但不接入的工具（TOOLS_RESERVED，9 个）
 
-`auto-bind-coupons`（领券动作，会改变用户账户状态；`available-coupons` 已于 2026-10-18 以**只读查询**接入，不领取）、`delivery-create-address`（写操作）、`create-order` / `cancel-order` / `query-order`（订单操作）、`mall-*` / `query-lottery-info` / `draw-lottery`（商城与抽奖，涉及积分扣减）。这些工具具有实际影响，按比赛要求「真实下单或其他具有实际影响的操作必须等待用户明确确认」，本仓库不接入，仅在代码 `TOOLS_RESERVED` 中登记边界。
+按比赛规则「真实下单或其他具有实际影响的操作必须等待用户明确确认」，以下工具一律不接入，仅在代码 `TOOLS_RESERVED` 中登记边界：
+
+- **写操作（7）**：`auto-bind-coupons`（领券改变账户券资产；`available-coupons` 已于 2026-10-18 以**只读查询**接入，不领取）、`delivery-create-address`（写地址簿）、`create-order` / `cancel-order`（真实订单）、`mall-create-order`（扣积分/现金兑换）、`party-order-create`（真实派对预约）、`draw-lottery`（原子扣积分/次数）；
+- **外送链路（2）**：`delivery-query-addresses` / `delivery-query-stores`——契约已确认但账户无保存地址，端到端不可用（`delivery-query-addresses` 的「无地址」诚实失败路径已如实验证）。
+
+> 注：`query-order` / `order-list` / `mall-order-list` / `mall-order-detail` / `query-lottery-info` / `query-my-prizes` 等**只读**工具已由 Skill 支线覆盖（§3.15），不再属于「预留」——预留清单只保留写操作与端到端不可用项。
 
 ## 3. 调用链（一次完整任务，联调实测）
 
@@ -347,21 +357,21 @@ code=600010  使用优惠券需要couponId和couponCode
 
 ## 5. 在 WorkBuddy 中接入（推荐路径）
 
-比赛官方推荐使用 WorkBuddy 开发与运行 Skill。WorkBuddy 作为 MCP Client 直连麦当劳 MCP Server，Skill（skill.md）指导 AI 按上述调用链编排工具，**无需自行重复实现 MCP Client**：
+比赛官方推荐使用 WorkBuddy 开发与运行 Skill。WorkBuddy 作为 MCP Client 直连麦当劳 MCP Server，Skill（SKILL.md）指导 AI 按上述调用链编排工具，**无需自行重复实现 MCP Client**：
 
 1. WorkBuddy → 左侧边栏【专家·技能·连接器】→【连接器】→【自定义连接器】→【配置 MCP】；
 2. 粘贴 `mcp-config.example.json` 内容，把 `${MCD_MCP_TOKEN}` 替换为真实 Token（仅保存在你的 WorkBuddy 连接器配置中）；
-3. 启用 `mcd-mcp` 连接器，安装本仓库 `skill.md` 为技能；
+3. 启用 `mcd-mcp` 连接器，安装本仓库 `SKILL.md` 为技能；
 4. 对话框中直接描述需求，如：「用麦门异世界帮我规划：预算 40，想吃辣，外送到南山科技园」。
 
 独立运行的 Python 引擎（`python -m burger_quest quest`）使用官方 `mcp` Python SDK 做同样的 Streamable HTTP 调用，用于可复现演示、自动化测试与脱离宿主环境的集成。
 
 ### Skill 与代码的一致性守卫
 
-`skill.md`（WorkBuddy 技能入口）与仓库代码保持同步，由 `tests/test_skill_docs.py` 自动校验：
+`SKILL.md`（WorkBuddy 技能入口）与仓库代码保持同步，由 `tests/test_skill_docs.py` 自动校验：
 
-- 文档中提到的每个 MCP 工具名都必须在 `TOOLS_USED` / `TOOLS_RESERVED` 真实清单内（防虚构工具名）；
-- 引擎使用的 11 个工具 + 外送 2 个工具都必须在文档中说明；
+- 文档中提到的每个 MCP 工具名都必须在 `TOOLS_USED` / `TOOLS_SKILL_READONLY` / `TOOLS_RESERVED` 真实清单内（防虚构工具名）；
+- 引擎使用的 11 个工具 + 外送入口 1 个 + 支线任务 15 个工具都必须在文档中说明；
 - 必备章节（角色定位/前置检查/解析/调用链/规划/输出/卡片/错误处理/红线/对话示例）齐全；
 - 文档声称的解析规则与 `nlparser` 实际行为一致（10 条抽查）；
 - 文档中三个数值示例与引擎实际输出一致（示例可执行、不编数字）；
@@ -381,9 +391,9 @@ code=600010  使用优惠券需要couponId和couponCode
 1. 官方仓库 README（`M-China/mcd-mcp-server`）：端点 `https://mcp.mcd.cn`、Streamable HTTP、`Authorization: Bearer`、限流 600 次/分钟、错误码 401/429——与本文档 §1 一致；
 2. **实时 `list_tools` Schema 快照**：2026-10-17 用真实 Token 经项目自有客户端拉取官方 35 个工具的完整 `inputSchema`，**verbatim 落盘** `tests/fixtures/official_tools_schema.json`（未做任何修改），测试套件据此做回归。
 
-**首个实证差异**：README 工具表列 33 个工具，实时服务实为 35 个（多 `query-promotions` / `query-survey-coupon`，README 最后提交 2026-10-01 早于服务上线）——以实时 Schema 为准；两者均不在 MVP 范围。项目 `TOOLS_USED`(8) + `TOOLS_RESERVED`(11) 全部在官方 35 个内，无虚构工具名。
+**首个实证差异**：README 工具表列 33 个工具，实时服务实为 35 个（多 `query-promotions` / `query-survey-coupon`，README 最后提交 2026-10-01 早于服务上线）——以实时 Schema 为准。项目 `TOOLS_USED`(11) + `TOOLS_SKILL_READONLY`(15) + `TOOLS_RESERVED`(9) 全部在官方 35 个内，无虚构工具名（2026-10-19 三层口径）。
 
-### 统一契约清单（10 个在用工具，三态标注）
+### 统一契约清单（引擎在用工具，三态标注；Skill 支线 15 个工具见 §3.15）
 
 三态定义：**官方定义已核对** = 快照中有 Schema 且本文表逐项核对；**本地测试覆盖** = 测试套件含正常+异常响应用例；**真实服务已验证** = 2026-10-17 用真实 Token 实际调用。
 
@@ -497,3 +507,44 @@ Streamable HTTP 的 SSE 流由官方 SDK 在传输层完成聚合；客户端只
 
 顶层 `state` 聚合：全部分区 `error` → `error`；部分失败 → `partial`（成功分区照常展示，
 失败分区不显示为 0 张）；否则 `ok`。某一分区失败不影响其余分区继续查询。
+
+## 3.15 支线任务工具契约（2026-10-19，真实 Token 端到端实测）
+
+引擎（Python）不调用本节工具——它们由 WorkBuddy Agent 经 `mcd-mcp` 连接器直调，
+支撑 `SKILL.md` §10 的四条支线（麦享会宝库 / 派对据点侦查 / 团餐公会 / 冒险日志）。
+契约来源同 §3.12：官方 `list_tools` Schema 快照 + 真实 Token 端到端调用，**无猜测参数**。
+
+### 统一契约清单（15 个支线只读工具）
+
+| 工具 | 官方必填参数 | 实测确认的可选参数与返回结构 | 支线 |
+| --- | --- | --- | --- |
+| `mall-points-products` | 无 | **`catRuleIds` 类目规则链**：`1>4`=积分兑换餐品券（实测 24 个，如 200 积分兑「18.8元2份麦辣鸡翅」）；`1>6>21`=主题类派对、`1>6>20`=生日类派对（¥45–198）；不传只返回活动票类。返回 `spuId`/`spuName`/`catName`/`point`/`price`/`shopId` | 10.1 / 10.2 |
+| `mall-product-detail` | `spuId` | 返回 `skuList`（skuId/积分/价格）与售卖说明；**不需要 shopId** | 10.1 |
+| `mall-order-list` | 无 | `lastId` 翻页 / `size` 每页条数（默认 10、上限 10） | 10.1 / 10.4 |
+| `mall-order-detail` | `orderId` | 订单号必须来自列表返回，不编造 | 10.1 / 10.4 |
+| `query-party-city` | `spuId` | 实测 279 个城市；字段 `code`/`name`/`latitude`/`longitude` | 10.2 |
+| `query-party-store` | `code`（城市 code） | 实测需配合 `latitude`+`longitude`+`spuId`；返回门店 `code`/`name`/`address`/`distance`/`businessStatus`（实测深圳 40 家） | 10.2 |
+| `query-party-store-date` | `spuId`、`storeCode` | 返回可预约日期 `[{date, storeCode}]`（实测 5 个） | 10.2 |
+| `query-party-store-session` | `spuId`、`storeCode`、**`dateStr`**（不是 `date`） | 返回场次 `timeStart`/`timeEnd`/`partyMin`/`partyMax`/`price`（**单位：分**，13800=¥138）/`leftNum` 剩余名额 | 10.2 |
+| `query-lottery-info` | 无 | 活动名/起止时间/单次消耗积分（`drawPoint`）/规则/资格判定（`drawDecision`）/奖品列表。只看不抽 | 10.1 |
+| `query-my-prizes` | 无 | `pageNum`/`pageSize`（默认 1/10、最大 50）；按中奖时间倒序 + `hasMore` | 10.1 |
+| `query-promotions` | `storeCode`、`orderType`、`beType` | 团餐 `beType=6`；实测 `orderType=1` 返回真实规则（`promotionId`/`promotionType`/`ruleCategory`/`beTypes`/起止时间）；`orderType=2` 需 `beCode` | 10.3 |
+| `query-meal-assistance` | `storeCode` | 门店不支持时返回业务码 **610501**「仅支持企业团餐场景下使用助餐服务」——按空态处理，不是网络错误 | 10.3 |
+| `order-list` | 无 | 历史订单（到店/外送，非商城）；实测空账户返回 `{}`——空是有效结果 | 10.4 |
+| `query-order` | `orderId` | 假订单号实测返回 610303「订单号不存在！」；含地址/手机号，隐私红线见下 | 10.4 |
+| `query-survey-coupon` | `orderId` | CSAT 答卷与关联奖券（标题/核销时间/核销状态/点餐方式）；官方明确未返回的原始答卷/会员号/券字段不得猜测 | 10.4 |
+
+### 契约核对结论（支线，2026-10-19）
+
+1. **类目规则链是数据面的开关**：`mall-points-products` 传不传 `catRuleIds` 返回完全不同的商品集合（活动票 vs 积分餐品券）——「无参数调用看到空/不对」先怀疑类目，不要当成没数据；
+2. **派对链五段顺序即前置条件**：`spuId`（选商品）→ 城市 → 门店 → 日期 → 场次，任一步骤的入参都来自上一步返回（门店编码取自 `query-party-store` 的 `code` 字段、日期取自 `query-party-store-date`），不允许跨步编造；
+3. **参数名坑已实测锁定**：场次日期是 `dateStr`（早期按 `date` 传全部 400）、派对城市入参是 `code`（非 `city`/`cityCode`/`cityId`/`cityName`）——这两个坑写进 `SKILL.md` §10.2 防止回归；
+4. **金额单位一致**：派对场次 `price` 与主链路 `calculate-price` 同为「分」；
+5. **空态与业务码**：`order-list` 空账户返回 `{}`（有效空）、`query-meal-assistance` 610501（门店不支持）、`query-order` 610303（订单号不存在）——都按「诚实空结果/明确错误」处理，不当成查询失败也不编造；
+6. **隐私红线（比主链路更严）**：订单类返回常含配送地址/手机号——只展示用户问到的字段，地址/手机号不回显、不写入任何文件；`query-my-account` 的 `accountId` 同样绝不读取输出；
+7. **写操作边界不变**：`mall-create-order` / `draw-lottery` / `party-order-create` 一律不调用（`TOOLS_RESERVED`），只告诉用户官方入口由本人操作。
+
+### 支线调用量
+
+四条支线合计通常 2–6 次调用（限流 600 次/分钟充裕）；相同参数的只读查询任务内去重；
+支线可与主线串联（如「积分快过期」→ 查可兑餐品券 → 主线规划时优先用已持有券核验）。

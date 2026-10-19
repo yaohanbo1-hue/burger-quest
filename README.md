@@ -3,8 +3,8 @@
 [![CI](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/yaohanbo1-hue/burger-quest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-657%20passed-brightgreen)](#6-测试)
-[![Coverage](https://img.shields.io/badge/coverage-91.44%25-brightgreen)](#6-测试)
+[![Tests](https://img.shields.io/badge/tests-722%20passed-brightgreen)](#6-测试)
+[![Coverage](https://img.shields.io/badge/coverage-89.97%25-brightgreen)](#6-测试)
 [![mypy](https://img.shields.io/badge/mypy-0%20error-brightgreen)](#6-测试)
 [![bandit](https://img.shields.io/badge/bandit-0%20finding-brightgreen)](#6-测试)
 
@@ -21,14 +21,15 @@
 **方案**：把点餐变成一场 RPG 冒险。说一句话（预算/口味/人数/用餐方式），游戏主持人调用**麦当劳中国官方 MCP Server** 拉取真实菜单与权威价格，给出最多 3 个可比较方案 + 一张可分享成就卡。
 
 ```
-一句话需求 → nlparser 解析 → 官方 MCP（10 个在用只读工具）→ planner（≤3 方案，权威核验）→ 成就卡
+一句话需求 → nlparser 解析 → 官方 MCP（引擎 11 个只读工具 + Skill 支线 15 个只读工具）→ planner（≤3 方案，权威核验）→ 成就卡
 ```
 
 **技术亮点**：
 
-- **官方 MCP 全链路**：11 个在用只读工具（7 个常规主链路 + 1 个餐品详情回退 + 3 个扩展只读：活动日历/可领券/积分账户；代码 `TOOLS_USED` 注册表为权威，并非每次任务全调）走官方 Streamable HTTP + 官方 `mcp` SDK；分工具超时、有限退避、429 降速、401 不重试、连续失败断路（重试/熔断细节有专项测试）；
+- **官方 MCP 全链路**：引擎 11 个在用只读工具（7 个常规主链路 + 1 个餐品详情回退 + 3 个扩展只读：活动日历/可领券/积分账户；代码 `TOOLS_USED` 注册表为权威，并非每次任务全调）走官方 Streamable HTTP + 官方 `mcp` SDK；分工具超时、有限退避、429 降速、401 不重试、连续失败断路（重试/熔断细节有专项测试）；
+- **双形态 Skill**：`SKILL.md` 指导宿主 AI 经连接器直调官方 35 个工具中的 **26 个只读工具**（引擎 11 + 支线 15：麦享会宝库/派对据点侦查/团餐公会/冒险日志，参数契约 2026-10-19 全部实测），写操作一律不代做；
 - **不编造铁律**：总价只认 `calculate-price` 权威返回；菜单价缺失的餐品直接出局；缺 Token 明确失败（退出码 2），**绝不回退演示数据**；
-- **工程完成度**：657 个测试、覆盖率 91.44%、mypy 0 error、bandit 0 finding、pip-audit 0 漏洞——四道质量门禁（覆盖率 ≥85% / mypy 零 error / bandit 零 finding / pip-audit 零漏洞）；**当前最新提交的 CI 通过 7/7 个 job**：Linux ×4（Python 3.10/3.11/3.12/3.13：全量测试 + 覆盖率门禁 + wheel 打包自检 + 空白检查）、Quality gates ×1（密钥扫描 / skill 文档一致性 / mypy / bandit / pip-audit / 离线演示可复现性）、Windows ×2（Python 3.11/3.12：全量测试 + PowerShell 脚本解析 + 无 Token 路径行为 + CLI 入口与离线演示）；
+- **工程完成度**：722 个测试、覆盖率 89.97%、mypy 0 error、bandit 0 finding、pip-audit 0 漏洞——四道质量门禁（覆盖率 ≥85% / mypy 零 error / bandit 零 finding / pip-audit 零漏洞）；**当前最新提交的 CI 通过 7/7 个 job**：Linux ×4（Python 3.10/3.11/3.12/3.13：全量测试 + 覆盖率门禁 + wheel 打包自检 + 空白检查）、Quality gates ×1（密钥扫描 / skill 文档一致性 / mypy / bandit / pip-audit / 离线演示可复现性）、Windows ×2（Python 3.11/3.12：全量测试 + PowerShell 脚本解析 + 无 Token 路径行为 + CLI 入口与离线演示）；
 - **安全边界**：本地 Web 界面 Host 白名单 + Origin 同源校验（挡 DNS rebinding 与跨站代打，`Origin: null` 一律拒绝）；Token 不落审计/日志/卡片/进度存档任何一处。
 
 **60 秒验证**（完全离线，无需 Token）：
@@ -37,7 +38,7 @@
 pip install .
 python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人"   # 完整任务 + 成就卡
 python -m burger_quest demo "预算5块，想吃汉堡"                           # 诚实的失败，不是编造
-python -m pytest tests/ -q                                              # 657 个测试
+python -m pytest tests/ -q                                              # 722 个测试
 ```
 
 深读：MCP 集成与联调实测 → [MCP_INTEGRATION.md](MCP_INTEGRATION.md)；架构与数据流 → §8；质量门禁 → §6。
@@ -91,7 +92,7 @@ pip install .
 ```bash
 burger-quest demo "我想吃辣，预算35，外送到南山科技园，一个人"   # 控制台入口
 python -m burger_quest demo "我想吃辣，预算35"                    # 模块入口
-python -m pytest tests/ -q                                       # 测试（657 个）
+python -m pytest tests/ -q                                       # 测试（722 个）
 ```
 
 依赖分层（单一事实来源 `pyproject.toml`）：运行时仅 `mcp>=1.2.0`（官方 SDK，**仅真实 MCP 模式需要**；
@@ -160,7 +161,7 @@ powershell -File scripts\check-mcp-windows.ps1
 | 真实 MCP 诊断 | `check-mcp-windows.ps1`（真实 Token） | ✅ 退出码 0（doctor L1–L4 全过） |
 | 中文+空格路径 | junction 到「D:\麦门 测试\burger-quest」后运行脚本 | ✅ 退出码 0（无需管理员权限） |
 | 非管理员 | 以上全部在当前用户权限下完成 | ✅ 无提权、无关闭安全软件 |
-| 全量测试 | `pytest tests/ -q` | ✅ 657 passed |
+| 全量测试 | `pytest tests/ -q` | ✅ 722 passed |
 
 **关于输出乱码的说明**：在 PowerShell 里把脚本输出**重定向到文件或管道**时，父进程会按系统代码页重新编码（中文 Windows 默认 GBK），这是 Windows 控制台机制、非脚本缺陷；交互式控制台窗口显示始终正常。需要 UTF-8 捕获时：`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)` 后再重定向，或用 `--json`/`--card-html` 让 Python 直接写 UTF-8 文件。
 
@@ -250,11 +251,11 @@ python -m burger_quest smoke          # 真实模式：八步只读检查（需 
 
 ### 4.3 作为 WorkBuddy Skill 使用
 
-把本仓库的 `skill.md` 安装为 WorkBuddy 技能，并在 WorkBuddy 中配置麦当劳 MCP 连接器（`mcp-config.example.json` 提供模板），即可在对话框中直接说：
+把本仓库的 `SKILL.md` 安装为 WorkBuddy 技能，并在 WorkBuddy 中配置麦当劳 MCP 连接器（`mcp-config.example.json` 提供模板），即可在对话框中直接说：
 
 > 「用麦门异世界帮我规划：预算 40，想吃辣，外送到南山科技园」
 
-详细用法见 [skill.md](skill.md) 与 [MCP_INTEGRATION.md](MCP_INTEGRATION.md)。
+详细用法见 [SKILL.md](SKILL.md) 与 [MCP_INTEGRATION.md](MCP_INTEGRATION.md)。
 
 ### 4.4 成就卡预览（复古 RPG 界面 · 红黄配色 · 独立项目声明）
 
@@ -371,14 +372,14 @@ POST /api/quest    Origin:http://127.0.0.1:PORT  → 200 进入业务逻辑
 python -m pytest tests/ -v
 ```
 
-657 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（skill.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）、**券双字段协议契约**（couponId+couponCode 成对提交 / 600010 忠实还原 / 演示券均带码 / 三种券形态统一）、**10 类失败路径矩阵**（非法参数 / 缺字段 / 业务错误 / 协议级 isError / 部分工具失败 / 价格缺失 / 响应结构变化 / 超时 / 401 / 429，由元测试断言矩阵齐全且用例真实存在，防退化）、**故障注入体系**（12 个注入点 I1-I12：网络分区 / 慢响应 / 半数工具失败 / 脏数据 / 结构漂移 / 限流风暴 / 断路器熔断 / 会话重试预算 / 部分成功混合失败 / 缓存污染 / 故障不污染后续状态 / 注入不污染全局——验证的是**降级行为合格**而非仅抛异常）、**安全与隐私审计**（本地 Web 服务 Host 白名单挡 DNS rebinding + Origin 校验挡跨站代打真实查询 / **`Origin: null`（沙箱 iframe 等不透明来源）POST 一律拒绝** / 默认只监听 localhost；前端无内联脚本与 innerHTML、零 Token 引用；Token 不进审计/日志/卡片/进度存档；进度存档零个人信息且 opt-in；全仓无硬编码 Token 与手机号）、**Web 服务端到端**（真实 ThreadingHTTPServer + 真实 HTTP 请求验证防线接线：恶意 Host/跨站 Origin/null Origin 在真实线路上 403 且业务代码零调用；同源请求走完业务与降级路径；每个响应带 CSP/nosniff/no-referrer/no-store；404/413/非法 JSON 行为）、**MCP 全链路体检**（403 映射 / 连接超时与读取超时分离 / 无信封响应强制失败+白名单宽松 / 显式传输层超时 / doctor L1 探针分类且不携带 Token / 五层状态汇总 / 真实模式不回退 Demo）、**MCP 工具契约审计**（官方 list_tools Schema 快照 verbatim 落盘 tests/fixtures/；端到端传参对照官方 Schema：必填齐备/无官方外参数/枚举合法/类型正确；beCode 传递规则到店禁传/外送必传；优惠券 per-item 挂载与容量守卫；三态台账守卫防新工具绕过审计）。
+722 个测试覆盖：自然语言解析（预算：明确/上限/**模糊区间二三十元**/多值取严/营养数字不干扰；人数；口味：**否定口味不吃辣（硬约束不被其他偏好覆盖）**/冲突裁决/清淡；营养：低卡/高蛋白/**少糖识别但明示不可执行**/非医疗声明；用餐方式；位置：街道商场园区/**门店名**/X附近；心情风格；**sources 溯源 explicit/inferred/default**；调试表示默认不回显原文）、组合规划与**不编造铁律**（价格缺失出局 / 算价失败无方案 / 预算筛除 / 优惠不默认叠加 / 营养零覆盖排除部分覆盖降权）、边界案例（预算刚好相等 / 超出一分钱 / 券提交无效果 / 无可行解可解释失败）、最多三个可比较方案与排序、RPG 不变性（文案不改数量/总价/剩余预算）、确定性、真实 MCP 客户端（同步门面 / 401·429 状态码还原 / 超时 / SDK 缺失 / 业务错误 / 协议级 isError / 非法返回结构，用假会话不访问网络）、**MCP 效率与可靠性**（调用次数上限 / 分工具超时 / 瞬时错误退避重试 / 401 不重试 / 429 降速 / 任务内去重 / 短 TTL 缓存与过期 / 算价与优惠券绝不缓存 / 失败不进缓存 / 部分工具失败隔离）、防御式字段适配（联调实测格式：文本信封提取、菜单骨架、算价分单位、营养文本解析）、门店解析流程（多候选不默默选择 / 无位置要求补充 / 外送 beCode 链路 / 无效编码明确报错）、CLI 全流程（demo / quest / stores / tools / smoke / 帮助与退出码）、只读冒烟测试（全通过 / 某步失败 / 无门店不编造 / 仅只读红线 / 连接失败 / 缺 Token）、四个离线演示的场景固化、**成就卡安全与结构**（恶意 HTML/脚本/引号/特殊字符转义、LIVE/DEMO 标签、装备溯源、价格四段、未核验与营养缺失显未知、无外部资源、移动端与打印适配）、分享卡转义与必备声明、**Skill 文档一致性**（SKILL.md 提到的工具名均真实存在/必备章节齐全/解析规则与引擎一致/数值示例与引擎输出一致）、**券双字段协议契约**（couponId+couponCode 成对提交 / 600010 忠实还原 / 演示券均带码 / 三种券形态统一）、**10 类失败路径矩阵**（非法参数 / 缺字段 / 业务错误 / 协议级 isError / 部分工具失败 / 价格缺失 / 响应结构变化 / 超时 / 401 / 429，由元测试断言矩阵齐全且用例真实存在，防退化）、**故障注入体系**（12 个注入点 I1-I12：网络分区 / 慢响应 / 半数工具失败 / 脏数据 / 结构漂移 / 限流风暴 / 断路器熔断 / 会话重试预算 / 部分成功混合失败 / 缓存污染 / 故障不污染后续状态 / 注入不污染全局——验证的是**降级行为合格**而非仅抛异常）、**安全与隐私审计**（本地 Web 服务 Host 白名单挡 DNS rebinding + Origin 校验挡跨站代打真实查询 / **`Origin: null`（沙箱 iframe 等不透明来源）POST 一律拒绝** / 默认只监听 localhost；前端无内联脚本与 innerHTML、零 Token 引用；Token 不进审计/日志/卡片/进度存档；进度存档零个人信息且 opt-in；全仓无硬编码 Token 与手机号）、**Web 服务端到端**（真实 ThreadingHTTPServer + 真实 HTTP 请求验证防线接线：恶意 Host/跨站 Origin/null Origin 在真实线路上 403 且业务代码零调用；同源请求走完业务与降级路径；每个响应带 CSP/nosniff/no-referrer/no-store；404/413/非法 JSON 行为）、**MCP 全链路体检**（403 映射 / 连接超时与读取超时分离 / 无信封响应强制失败+白名单宽松 / 显式传输层超时 / doctor L1 探针分类且不携带 Token / 五层状态汇总 / 真实模式不回退 Demo）、**MCP 工具契约审计**（官方 list_tools Schema 快照 verbatim 落盘 tests/fixtures/；端到端传参对照官方 Schema：必填齐备/无官方外参数/枚举合法/类型正确；beCode 传递规则到店禁传/外送必传；优惠券 per-item 挂载与容量守卫；三态台账守卫防新工具绕过审计）。
 
 ### 质量门禁（CI 与本地同口径）
 
-| 门禁 | 命令 | 当前状态（2026-10-17） |
+| 门禁 | 命令 | 当前状态（2026-10-19 复跑） |
 | --- | --- | --- |
-| 全量测试 | `pytest -q` | 657 passed |
-| 覆盖率 | `pytest --cov=burger_quest --cov-fail-under=85` | 91.44%（基线 90%，阈值只升不降） |
+| 全量测试 | `pytest -q` | 722 passed |
+| 覆盖率 | `pytest --cov=burger_quest --cov-fail-under=85` | 89.97%（阈值 85%，CI 同口径） |
 | 类型检查 | `mypy burger_quest`（SDK 缺桩按 pyproject 配置容忍） | 0 error（曾 45） |
 | 安全扫描 | `bandit -r burger_quest` | 0 finding（曾 12；两处 `nosec` 均带理由） |
 | 依赖漏洞 | `pip-audit` | 0 known vulnerability |
@@ -410,9 +411,10 @@ python tools/prepush_check.py --full   # 追加全量 pytest
 
 ## 7. 已知限制（透明声明）
 
-**已于 2026-10-13 用官方 Token 实测验证**（详见 MCP_INTEGRATION.md §3.5）：
+**已于 2026-10-13/17/19 用官方 Token 实测验证**（详见 MCP_INTEGRATION.md §3.5/§3.12/§3.15）：
 - 网络链路、`mcp` SDK 1.27.2 双版本兼容、401/429 状态码还原；
-- 7 个工具的真实参数名与返回结构（门店查询 / 菜单骨架 / 餐品详情 / 价格发现 / 算价验价 / 营养文本；**当日实测覆盖的在用工具数；`TOOLS_USED` 注册口径当时即为 8 个、现仍为 8 个**，最新逐工具三态台账见 MCP_INTEGRATION.md §3.12）；
+- 7 个工具的真实参数名与返回结构（门店查询 / 菜单骨架 / 餐品详情 / 价格发现 / 算价验价 / 营养文本；当日实测覆盖数，`TOOLS_USED` 注册口径此后逐步扩至 **11 个**，最新逐工具三态台账见 MCP_INTEGRATION.md §3.12）；
+- **2026-10-19 支线扩容**：SKILL.md §10 四条支线调用链覆盖的 **15 个只读工具**经真实 Token 端到端实测（积分商城类目链 / 派对五链 / 团餐促销 / 历史订单），参数契约与返回结构见 MCP_INTEGRATION.md §3.15；
 - 多候选门店列出暂停、外送无地址时的明确说明。
 
 **仍未验证（需要特定账户状态）**：
@@ -516,7 +518,7 @@ burger-quest/
 ├── PERFORMANCE.md            性能基线与回归阈值（可复现测量）
 ├── TECH_DEBT.md              技术债台账（已清偿/在账/防新增机制）
 ├── ACCEPTANCE.md             候选版本总验收报告（12 项全过）
-├── skill.md                  WorkBuddy Skill 入口
+├── SKILL.md                  WorkBuddy Skill 入口
 ├── workbuddy.md              WorkBuddy 开发上下文（专项奖励材料）
 ├── mcp-config.example.json   MCP 配置模板（仅占位符）
 ├── requirements.txt
@@ -534,7 +536,7 @@ burger-quest/
 │   ├── smoke.py              只读 MCP 冒烟测试
 │   ├── cli.py                命令行入口
 │   └── data/demo_data.json   演示数据（随包分发，明确标注非实时）
-├── tests/                    657 个测试（含 official_tools_schema.json 官方 Schema 快照）
+├── tests/                    722 个测试（含 official_tools_schema.json 官方 Schema 快照）
 ├── tools/                    工程脚本（prepush_check 预检 / build_portable 发布包 / measure_perf 性能基线）
 └── examples/                 可复现演示与示例卡片
 ```
@@ -545,7 +547,7 @@ burger-quest/
 git clone https://github.com/yaohanbo1-hue/burger-quest.git
 cd burger-quest
 pip install -e ".[dev]"        # 运行时 + 测试/质量工具（pytest/mypy/bandit/pip-audit）
-python -m pytest tests/ -q     # 657 个测试
+python -m pytest tests/ -q     # 722 个测试
 python tools/prepush_check.py  # 推送前预检（CI 同口径：空白/语法/仓库状态）
 python -m burger_quest smoke --demo   # 只读冒烟（离线）
 ```
@@ -553,7 +555,7 @@ python -m burger_quest smoke --demo   # 只读冒烟（离线）
 贡献约定：
 
 1. **铁律不可破**：不编造餐品/价格/优惠/库存；新增能力必须带测试（含失败路径）；
-2. **文档与代码同步**：改了工具名/调用链/解析规则，`tests/test_skill_docs.py` 会校验 `skill.md` 与代码的一致性；
+2. **文档与代码同步**：改了工具名/调用链/解析规则，`tests/test_skill_docs.py` 会校验 `SKILL.md` 与代码的一致性；
 3. **安全底线**：不提交任何真实 Token 或配置；HTML/Markdown 输出必须转义用户与 MCP 文本；CI 的 secret scan 会拦截；
 4. **演示数据**：`burger_quest/data/demo_data.json` 为演示数据，结构须与真实 MCP 返回保持兼容，不得冒充实时数据；
 5. **质量门禁**：覆盖率 ≥85%、mypy 零 error、bandit 零 finding、pip-audit 零漏洞——见 §6「质量门禁」；推送前跑 `tools/prepush_check.py`（CI 同口径，专治本地全绿 CI 红）；
@@ -570,7 +572,7 @@ python -m burger_quest smoke --demo   # 只读冒烟（离线）
 ## ❓ 评委常见疑问（FAQ）
 
 **Q1：真的调用了麦当劳官方 MCP 吗，会不会是写死的假数据？**
-真实模式连接 `https://mcp.mcd.cn`（官方 Streamable HTTP），2026-10-13/17 用官方 Token 做过联调实测（还原 401/429、券双字段契约 600010、算价分单位），全过程记录在 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) §3.5。离线演示模式用 mock 客户端 + `demo_data.json`，输出**带 DEMO 徽章**与真实模式明确区分；657 个测试全部用假会话验证链路，**不访问网络也能全绿**。
+真实模式连接 `https://mcp.mcd.cn`（官方 Streamable HTTP），2026-10-13/17 用官方 Token 做过联调实测（还原 401/429、券双字段契约 600010、算价分单位），全过程记录在 [MCP_INTEGRATION.md](MCP_INTEGRATION.md) §3.5。离线演示模式用 mock 客户端 + `demo_data.json`，输出**带 DEMO 徽章**与真实模式明确区分；722 个测试全部用假会话验证链路，**不访问网络也能全绿**。
 
 **Q2：价格会不会被编造？**
 不会，这是全项目最硬的约束：总价只来自 `calculate-price` 权威返回；菜单价缺失的餐品直接出局；估算价只用于预筛且**只低估、绝不高估**；优惠券不默认可叠加，以官方核验结果为准并如实说明差异。每次任务的数字来源可在输出的「数据来源」与「MCP 调用审计」里逐项追溯。

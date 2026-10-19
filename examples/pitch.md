@@ -48,7 +48,7 @@ pip install -e ".[dev]"
 python -m burger_quest demo "我想吃辣，预算35，外送到南山科技园，一个人"
 ```
 
-真实模式需要到 https://open.mcd.cn/mcp 申请 MCP Token 并配置到 WorkBuddy 连接器（或 `MCD_MCP_TOKEN` 环境变量）。作为 WorkBuddy Skill 使用时，仓库 `skill.md` 指导 AI 按同一调用链编排官方连接器。
+真实模式需要到 https://open.mcd.cn/mcp 申请 MCP Token 并配置到 WorkBuddy 连接器（或 `MCD_MCP_TOKEN` 环境变量）。作为 WorkBuddy Skill 使用时，仓库 `SKILL.md` 指导 AI 按同一调用链编排官方连接器。
 
 **边界（透明声明）**：MVP 不自动下单；真实数据依赖 MCP 服务可用性（限流 600 次/分钟）；港澳台不在服务范围；优惠券字段已验证范围有限（依赖账户状态）。
 

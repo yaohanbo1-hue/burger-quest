@@ -63,14 +63,14 @@ from .models import (
 )
 
 # 引擎实际调用的麦当劳 MCP 工具。
-# 计数口径（2026-10-18 统一，文档与代码必须一致）：
+# 计数口径（2026-10-19 核对修正；文档与代码必须一致）：
 #   7 个常规主链路：now-time-info / query-nearby-stores / query-meals /
 #                   query-store-coupons / query-my-coupons /
 #                   list-nutrition-foods / calculate-price
 #   1 个餐品详情回退：query-meal-detail（名称价格默认来自算价 productList）
-#   1 个外送专用：delivery-query-addresses（delivery-query-stores 未通过真实验证，已移除）
-#   2 个第一阶段扩展（只读）：campaign-calendar / available-coupons
-# 合计 12 个可用工具；TOOLS_RESERVED 中的写操作/抽奖工具一律不主动调用。
+#   3 个第一阶段扩展（只读）：campaign-calendar / available-coupons / query-my-account
+# 合计 11 个。外送地址 delivery-query-addresses 仅在用户明确外送时调用，
+# 登记在 TOOLS_RESERVED（其下游 delivery-query-stores 参数契约未确认，不接入）。
 TOOLS_USED = [
     "now-time-info",
     "query-nearby-stores",
@@ -84,17 +84,57 @@ TOOLS_USED = [
     "available-coupons",
     "query-my-account",
 ]
-# 预留但 MVP 不主动调用的工具（写进文档说明边界）
+
+# Skill 支线任务调用链覆盖的只读工具（2026-10-19 真实 Token 裸调实测验证）。
+# 这些工具**不由 Python 引擎调用**，而是由 WorkBuddy Agent 经 mcd-mcp 连接器
+# 直调（SKILL.md §10 支线任务）；登记在此供文档一致性测试与 tools 子命令使用。
+# 每个工具的入参契约均来自官方 list_tools Schema 快照 + 端到端实测：
+#   - mall-points-products(catRuleIds?)：积分商城商品；1>4=积分兑换餐品券，
+#     1>6>21=主题类派对等（实测 24 张餐品券 / 派对活动票 ¥45-198）
+#   - mall-product-detail(spuId)：商品 SKU 明细（skuList/积分/价格）
+#   - mall-order-list(lastId?/size?) / mall-order-detail(orderId)：商城订单
+#   - query-party-city(spuId) -> query-party-store(code+latitude+longitude+spuId)
+#     -> query-party-store-date(storeCode+spuId) -> query-party-store-session(spuId+storeCode+dateStr)
+#     （实测全链贯通：279 城市 -> 40 门店 -> 5 可约日期 -> 场次含价格(分)/余位 leftNum）
+#   - query-lottery-info() / query-my-prizes(pageNum?/pageSize?)：积分抽奖情报
+#   - query-promotions(storeCode+orderType+beType=6)：企业团餐促销（实测有数据）
+#   - query-meal-assistance(storeCode+orderType+beType=6)：团餐助餐（门店不支持返回 610501）
+#   - order-list() / query-order(orderId) / query-survey-coupon(orderId)：历史订单复盘
+TOOLS_SKILL_READONLY = [
+    "mall-points-products",
+    "mall-product-detail",
+    "mall-order-list",
+    "mall-order-detail",
+    "query-party-city",
+    "query-party-store",
+    "query-party-store-date",
+    "query-party-store-session",
+    "query-lottery-info",
+    "query-my-prizes",
+    "query-promotions",
+    "query-meal-assistance",
+    "order-list",
+    "query-order",
+    "query-survey-coupon",
+]
+
+# 已知但一律不主动调用的工具（写进文档说明边界）：
+# - 写操作/账户状态变更（8）：产生真实资金/订单/券资产/积分变动，MVP 只读；
+# - 参数契约未确认（3）：delivery-query-stores 需 addressId（账户无保存地址），
+#   query-party-store 的城市入参名在官方 Schema 中为 code+经纬度（2026-10-19
+#   已核实并移入 TOOLS_SKILL_READONLY）——此处仅保留真正无法验证的。
 TOOLS_RESERVED = [
-    "delivery-query-addresses",
+    # 写操作（用户明确要求也不调用；下单/领奖由用户本人在官方渠道完成）
     "delivery-create-address",
     "auto-bind-coupons",
     "create-order",
     "cancel-order",
-    "query-order",
-    "query-lottery-info",
     "draw-lottery",
-    "query-my-prizes",
+    "mall-create-order",
+    "party-order-create",
+    # 外送链路（契约部分确认但账户无地址，端到端不可用）
+    "delivery-query-addresses",
+    "delivery-query-stores",
 ]
 
 # 工具 -> 调用用途（审计与调用次数分析用；calculate-price 的用途由调用方细化）
@@ -112,6 +152,22 @@ TOOL_PURPOSE = {
     "available-coupons": "coupon_pool",
     "query-my-account": "points_account",
     "list_tools": "tool_discovery",
+    # Skill 支线（连接器直调；此处仅供审计/文档一致性）
+    "mall-points-products": "points_mall",
+    "mall-product-detail": "points_mall",
+    "mall-order-list": "points_mall_orders",
+    "mall-order-detail": "points_mall_orders",
+    "query-party-city": "party_scout",
+    "query-party-store": "party_scout",
+    "query-party-store-date": "party_scout",
+    "query-party-store-session": "party_scout",
+    "query-lottery-info": "lottery_info",
+    "query-my-prizes": "lottery_info",
+    "query-promotions": "corporate_meal",
+    "query-meal-assistance": "corporate_meal",
+    "order-list": "order_history",
+    "query-order": "order_history",
+    "query-survey-coupon": "order_history",
 }
 
 # 可短 TTL 缓存的只读工具 -> TTL 秒数（2026-10-14 效率优化）。

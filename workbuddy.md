@@ -24,7 +24,7 @@
 
 ## 4. 关键设计决策
 
-1. **双形态交付**：WorkBuddy Skill（skill.md，指导宿主 AI 编排 MCP 工具，不重复实现 MCP Client）+ 独立 Python 引擎（官方 mcp SDK 薄封装，用于可复现演示与 30 个自动化测试）；
+1. **双形态交付**：WorkBuddy Skill（SKILL.md，指导宿主 AI 编排 MCP 工具，不重复实现 MCP Client）+ 独立 Python 引擎（官方 mcp SDK 薄封装，用于可复现演示与 30 个自动化测试）；
 2. **三层「不编造」防线**：无价格餐品出局 → calculate-price 为总价唯一来源 → 失败路径话术模板化；对应测试全部覆盖；
 3. **金额用「分」（int）**：杜绝浮点误差，展示层才格式化；
 4. **防御式字段适配**：官方未公布工具级 JSON Schema，客户端按多键名容错提取，取不到即声明缺失；
@@ -63,7 +63,7 @@ python -m burger_quest stores "南山科技园" --demo               # 门店查
 3. **CLI 重构**：`quest` 移除 `--fixture`（彻底区分 demo/真实）；新增 `stores` 子命令；候选门店打印与重跑指引；`--fixture` 缺失友好报错；帮助文本重写；
 4. **SDK 联调修复**（实测 mcp 1.27.2）：双版本导出名兼容、headers 经 `httpx2.AsyncClient` 传递、transport 2/3 元组兼容、event hook 还原被 SDK 吞掉的 401/429 状态码；
 5. **联调后架构重构**：因官方 `query-meals` 只返回编码，服务端增加「短名单 → `query-meal-detail` 补名 → 一次 `calculate-price` 价格发现（分）→ 组合验价」链路；新增外送场景（配送地址 → 可配送门店拿 beCode；无地址明确说明）；Mock 与 fixtures 全面对齐真实返回格式；
-6. **文档去魅**：README/MCP_INTEGRATION/skill.md/demo.md 移除 DEMO-001 真实模式误导；`query-meal-detail` 转为「已接入」；MCP_INTEGRATION.md 增加 §3.5 联调实测记录与 §3.6 仍未验证项；README 增加「已知限制」；
+6. **文档去魅**：README/MCP_INTEGRATION/SKILL.md/demo.md 移除 DEMO-001 真实模式误导；`query-meal-detail` 转为「已接入」；MCP_INTEGRATION.md 增加 §3.5 联调实测记录与 §3.6 仍未验证项；README 增加「已知限制」；
 7. **测试扩充**：30 → 99 个（真实客户端同步门面与错误映射、联调格式适配器、门店与外送流程、CLI 全流程；修复一个空断言测试）。
 
 ## 5.6 MCP 集成专项复查记录（阶段 5，2026-10-14）
@@ -101,7 +101,7 @@ python -m burger_quest stores "南山科技园" --demo               # 门店查
 
 - 引擎源码 `burger_quest/`（models / nlparser / mcp_base / mcp_http / mcp_mock / planner / rpg / cards / service / smoke / cli，共 12 个模块）
 - 测试 `tests/`（126 个用例：解析、规划铁律、真实客户端同步门面与错误映射、协议级 isError、非法返回结构、联调格式适配器、门店与外送流程、CLI 全流程、只读冒烟测试、卡片安全、故障路径）
-- 文档：README.md、MCP_INTEGRATION.md、skill.md、examples/demo.md
+- 文档：README.md、MCP_INTEGRATION.md、SKILL.md、examples/demo.md
 - 比赛必交：CONTEST_DECLARATION.md（官方原文）、mcp-config.example.json（仅占位符）、workbuddy.md（本文件）
 - 示例：examples/cards/ 三张演示成就卡（HTML/Markdown/JSON）
 
@@ -167,9 +167,9 @@ _本文件由参赛者使用 WorkBuddy 开发本项目时整理生成。_
 
 测试 198 → 214 全绿。
 
-## 5.11 skill.md 打磨（2026-10-14）
+## 5.11 SKILL.md 打磨（2026-10-14）
 
-目标：让 Skill 在 WorkBuddy 中稳定、自然地调用 mcd-mcp 连接器。先读现有 skill.md/MCP_INTEGRATION/代码，核对差异后重写：
+目标：让 Skill 在 WorkBuddy 中稳定、自然地调用 mcd-mcp 连接器。先读现有 SKILL.md/MCP_INTEGRATION/代码，核对差异后重写：
 
 1. **角色定位**（要求 2）：明确「友好的 RPG 游戏主持人 + 谨慎的点餐规划助手」双重身份；事实优先于剧情、谨慎优先于热情、简洁优先于演出（不为剧情追问角色设定）；
 2. **调用链与实际代码对齐**（要求 1/3）：原文档写「逐个 query-meal-detail 拿名称」已过时——现行 service.py 是「一次 calculate-price 探测同时从 productList 拿名称+单价，详情仅回退」；券试探从「无券/单券/双券都探」改为「最优单券→最优双券→全失败回退无券」；文档同步更新并加效率提示（单任务 7-15 次调用）；

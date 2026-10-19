@@ -1,8 +1,8 @@
-"""Skill 文档一致性测试（2026-10-14）。
+"""Skill 文档一致性测试（2026-10-14；2026-10-19 支线任务扩展）。
 
-守卫 skill.md 与源代码不漂移：
-- 文档中提到的 MCP 工具名必须真实存在（TOOLS_USED + TOOLS_RESERVED），
-  防止虚构工具名/参数；
+守卫 SKILL.md 与源代码不漂移：
+- 文档中提到的 MCP 工具名必须真实存在（TOOLS_USED + TOOLS_SKILL_READONLY +
+  TOOLS_RESERVED），防止虚构工具名/参数；
 - 必备章节与红线条款齐全（角色定位/调用链/LIVE-DEMO/不自动下单/不索要 Token）；
 - 文档声称的解析规则与 nlparser 实际行为一致（抽查关键用例）；
 - 文档中的三个数值示例与引擎实际输出一致（示例可执行、不编数字）。
@@ -13,11 +13,11 @@ from pathlib import Path
 import pytest
 
 from burger_quest import nlparser
-from burger_quest.mcp_base import TOOLS_RESERVED, TOOLS_USED
+from burger_quest.mcp_base import TOOLS_RESERVED, TOOLS_SKILL_READONLY, TOOLS_USED
 from burger_quest.mcp_mock import MockMCPClient
 from burger_quest.service import run_quest
 
-SKILL_PATH = Path(__file__).resolve().parent.parent / "skill.md"
+SKILL_PATH = Path(__file__).resolve().parent.parent / "SKILL.md"
 SKILL_TEXT = SKILL_PATH.read_text(encoding="utf-8")
 
 # 文档中允许出现的非 MCP kebab-case 词（项目名/连接器名/命令等）
@@ -30,17 +30,36 @@ def _kebab_tokens(text: str) -> set:
 
 
 def test_all_mcp_tool_names_in_skill_are_real():
-    """skill.md 提到的每个 MCP 工具名都必须在代码的真实工具清单里。"""
-    known = set(TOOLS_USED) | set(TOOLS_RESERVED) | KNOWN_NON_TOOLS
+    """SKILL.md 提到的每个 MCP 工具名都必须在代码的真实工具清单里。"""
+    known = set(TOOLS_USED) | set(TOOLS_SKILL_READONLY) | set(TOOLS_RESERVED) | KNOWN_NON_TOOLS
     mentioned = _kebab_tokens(SKILL_TEXT)
     unknown = sorted(t for t in mentioned if t not in known)
-    assert not unknown, f"skill.md 提到不存在的工具/标识：{unknown}（不得虚构 MCP 工具名）"
+    assert not unknown, f"SKILL.md 提到不存在的工具/标识：{unknown}（不得虚构 MCP 工具名）"
 
 
 def test_skill_mentions_all_tools_the_engine_uses():
-    """引擎实际调用的 10 个工具 + 外送 2 个都应在文档中出现。"""
+    """引擎实际调用的 11 个工具 + 外送 1 个都应在文档中出现。"""
     for tool in list(TOOLS_USED) + ["delivery-query-addresses"]:
-        assert tool in SKILL_TEXT, f"skill.md 缺少工具说明：{tool}"
+        assert tool in SKILL_TEXT, f"SKILL.md 缺少工具说明：{tool}"
+
+
+def test_skill_mentions_all_sidequest_tools():
+    """支线任务调用链覆盖的 15 个只读工具都应在文档中出现（2026-10-19 实测）。"""
+    for tool in TOOLS_SKILL_READONLY:
+        assert tool in SKILL_TEXT, f"SKILL.md 支线任务缺少工具说明：{tool}"
+
+
+def test_skill_sidequest_sections_present():
+    """支线任务四区块 + 1024 模式章节齐全。"""
+    for section in (
+        "## 10. 支线任务",
+        "### 10.1 麦享会宝库",
+        "### 10.2 派对据点侦查",
+        "### 10.3 团餐公会",
+        "### 10.4 冒险日志",
+        "## 11. 1024 程序员节模式",
+    ):
+        assert section in SKILL_TEXT, f"SKILL.md 缺少章节：{section}"
 
 
 def test_skill_required_sections():
@@ -58,7 +77,7 @@ def test_skill_required_sections():
         "## 8. 边界（红线）",
         "## 9. 对话示例",
     ):
-        assert section in SKILL_TEXT, f"skill.md 缺少章节：{section}"
+        assert section in SKILL_TEXT, f"SKILL.md 缺少章节：{section}"
 
 
 def test_skill_red_lines_present():
@@ -110,7 +129,7 @@ def test_skill_call_chain_matches_code():
     ],
 )
 def test_skill_parsing_rules_match_engine(text, check):
-    """skill.md 解析表里的每条规则都与引擎实际行为一致。"""
+    """SKILL.md 解析表里的每条规则都与引擎实际行为一致。"""
     assert check(nlparser.parse(text)), f"文档规则与引擎不一致：{text}"
 
 

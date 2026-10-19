@@ -53,7 +53,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from . import __version__
-from .mcp_base import MCPClient, MCPError, TOOLS_RESERVED, TOOLS_USED, summarize_calls
+from .mcp_base import MCPClient, MCPError, TOOLS_RESERVED, TOOLS_SKILL_READONLY, TOOLS_USED, summarize_calls
 from .models import format_yuan
 from .service import run_quest
 
@@ -921,10 +921,13 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "tools":
-        print("引擎实际调用的麦当劳 MCP 工具：")
+        print("引擎实际调用的麦当劳 MCP 工具（quest/demo 主链路 + 已接子系统命令）：")
         for t in TOOLS_USED:
             print(f"  - {t}")
-        print("\n预留但 MVP 不主动调用（涉及真实资金/库存/账户状态，或需联调后接入）：")
+        print("\nSkill 支线任务调用链覆盖的只读工具（Agent 经 mcd-mcp 连接器直调，2026-10-19 实测验证）：")
+        for t in TOOLS_SKILL_READONLY:
+            print(f"  - {t}")
+        print("\n预留但一律不调用（写操作/账户状态变更，或参数契约无法验证）：")
         for t in TOOLS_RESERVED:
             print(f"  - {t}")
         return 0

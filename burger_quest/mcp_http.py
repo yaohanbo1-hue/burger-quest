@@ -490,7 +490,11 @@ class HttpMCPClient(MCPClient):
             raise
         except (TimeoutError, concurrent.futures.TimeoutError) as e:
             fut.cancel()
-            raise MCPError(tool, f"MCP 调用超时（{timeout:.0f} 秒无响应）；请检查网络后重试") from e
+            # 2026-10-19 审计修复：timeout 为 None 时（如 list_tools 未传超时），
+            # 旧代码直接 f"{timeout:.0f}" 会抛 TypeError 把超时错误变成崩溃。
+            # 消息用「生效超时」（调用方传入值，缺省 self.timeout）。
+            effective = timeout if timeout is not None else self.timeout
+            raise MCPError(tool, f"MCP 调用超时（{effective:.0f} 秒无响应）；请检查网络后重试") from e
         except Exception as e:
             raise self._map_error(tool, e) from e
 

@@ -1,21 +1,23 @@
-"""工具契约审计测试（2026-10-17）。
+"""工具契约审计测试（2026-10-17；2026-10-19 支线层扩充）。
 
 权威来源：麦当劳官方 MCP Server 的实时 `list_tools` Schema 快照
 （tests/fixtures/official_tools_schema.json，2026-10-17 用真实 Token 经
 项目自有客户端拉取，**verbatim 落盘**，未做任何修改）+ 官方仓库 README
 （端点/Streamable HTTP/Bearer/600 次每分钟/401/429）。
 
-本文件锁死四类不变量：
-1. 项目工具注册表（TOOLS_USED/TOOLS_RESERVED）是官方 35 工具的子集（不虚构工具名）；
+本文件锁死五类不变量：
+1. 项目三层注册表（TOOLS_USED/TOOLS_SKILL_READONLY/TOOLS_RESERVED）都是官方 35 工具的子集（不虚构工具名）；
 2. 端到端传参契约：完整 quest 流程中每个工具的实际入参，对照官方 Schema——
    必填齐备、参数名在官方属性集内（防拼错）、枚举值合法、类型正确；
 3. orderType/beCode 传递规则（官方明示：到店自取 beType=1 传 beCode 会报错；
    麦乐送 beType=2 必传 beCode）；
-4. 三态台账守卫：每个在用工具都必须有「官方定义已核对/本地测试覆盖/真实服务
-   已验证」的显式状态登记，新增工具不允许绕过审计。
+4. 三态台账守卫：每个在用/支线工具都必须有「官方定义已核对/本地测试覆盖/真实服务
+   已验证」的显式状态登记，新增工具不允许绕过审计；
+5. 支线层（TOOLS_SKILL_READONLY）契约：2026-10-19 用真实 Token 端到端实测的
+   入参契约与返回结构（探针记录见 MCP_INTEGRATION.md §3.15 与 SKILL.md §10）。
 
 不访问网络、不使用真实 Token（假会话驱动）；真实服务验证记录见
-MCP_INTEGRATION.md §3.12。
+MCP_INTEGRATION.md §3.12 / §3.15。
 """
 import json
 import types
@@ -26,6 +28,7 @@ import pytest
 from burger_quest.mcp_base import (
     OrderScene,
     TOOLS_RESERVED,
+    TOOLS_SKILL_READONLY,
     TOOLS_USED,
     build_calc_payload,
 )
@@ -44,7 +47,7 @@ from test_http_client import (
 
 FIXTURE = Path(__file__).parent / "fixtures" / "official_tools_schema.json"
 
-# 三态台账（与 MCP_INTEGRATION.md §3.12 契约清单保持一致；改工具必须同步改这里）：
+# 三态台账（与 MCP_INTEGRATION.md §3.12（引擎）+ §3.15（支线）契约清单保持一致；改工具必须同步改这里）：
 #   官方定义已核对 = 实时 list_tools Schema 快照中有定义且本测试逐项核对；
 #   本地测试覆盖 = 测试套件有用例覆盖（正常+异常响应）；
 #   真实服务已验证 = 2026-10-17 体检/契约审计用真实 Token 实际调用过；
@@ -69,6 +72,31 @@ CONTRACT_STATUS = {
     "query-my-account": {
         "real": "2026-10-18 实测返回 availablePoint=0 等积分字段（数值为字符串，已容错转换）",
     },
+    # 2026-10-19 支线层（Skill 经连接器直调；真实 Token 端到端实测，探针记录
+    # 见 MCP_INTEGRATION.md §3.15 与 SKILL.md §10）
+    "mall-points-products": {
+        "real": "2026-10-19 实测：catRuleIds=1>4 返回 24 个积分兑换餐品券；不传只返回派对/读书会活动票",
+    },
+    "mall-product-detail": {"real": "2026-10-19 实测 spuId 返回 skuList/积分/价格"},
+    "mall-order-list": {"real": "2026-10-19 实测分页参数 lastId/size（默认 10、上限 10）"},
+    "mall-order-detail": {"real": "2026-10-19 实测 orderId 来自列表返回，不编造"},
+    "query-party-city": {"real": "2026-10-19 实测返回 279 个可举办城市（code/name/latitude/longitude）"},
+    "query-party-store": {
+        "real": "2026-10-19 实测 code+latitude+longitude+spuId 返回门店列表（深圳 40 家）；"
+                "早期按 city/cityCode/cityId/cityName 传全部 400，正确入参是 code",
+    },
+    "query-party-store-date": {"real": "2026-10-19 实测返回可预约日期（5 个）"},
+    "query-party-store-session": {
+        "real": "2026-10-19 实测 spuId+storeCode+dateStr 返回场次（price 单位分/leftNum 余位）；"
+                "注意日期参数名是 dateStr（按 date 传 400）",
+    },
+    "query-lottery-info": {"real": "2026-10-19 实测返回活动名/起止时间/drawPoint/奖品列表"},
+    "query-my-prizes": {"real": "2026-10-19 实测返回奖品记录 + hasMore 分页"},
+    "query-promotions": {"real": "2026-10-19 实测 beType=6 返回真实企业团餐促销规则"},
+    "query-meal-assistance": {"real": "2026-10-19 实测门店不支持时返回业务码 610501（按空态处理）"},
+    "order-list": {"real": "2026-10-19 实测空账户返回 {}（空是有效结果，非失败）"},
+    "query-order": {"real": "2026-10-19 实测假订单号返回 610303「订单号不存在！」"},
+    "query-survey-coupon": {"real": "2026-10-19 实测返回 CSAT 答卷与关联奖券结构"},
 }
 
 
@@ -129,19 +157,29 @@ DELIVERY_RESPONSES = {
 
 
 def test_registry_is_subset_of_official(official):
-    """项目使用的/预留的工具必须全部在官方 35 工具内（防虚构工具名）。"""
+    """项目使用的/支线直调的/预留的工具必须全部在官方 35 工具内（防虚构工具名）。"""
     assert set(TOOLS_USED) <= set(official)
+    assert set(TOOLS_SKILL_READONLY) <= set(official)
     assert set(TOOLS_RESERVED) <= set(official)
 
 
 def test_contract_ledger_covers_all_used_tools():
-    """三态台账必须覆盖全部在用工具——新工具不允许绕过契约审计。"""
-    missing = [t for t in TOOLS_USED if t not in CONTRACT_STATUS]
+    """三态台账必须覆盖全部在用 + 支线工具——新工具不允许绕过契约审计。"""
+    missing = [t for t in list(TOOLS_USED) + list(TOOLS_SKILL_READONLY) if t not in CONTRACT_STATUS]
     assert not missing, f"以下工具缺少契约状态登记：{missing}"
     unblocked_without_evidence = [
         t for t, s in CONTRACT_STATUS.items() if s["real"] is None and "blocked" not in s
     ]
     assert not unblocked_without_evidence, "标记为未真实验证的工具必须写明阻塞原因"
+
+
+def test_registry_layers_are_disjoint():
+    """三层注册表互不重叠（同一工具不能既由引擎调用又登记预留，口径唯一）。"""
+    used, skill, reserved = set(TOOLS_USED), set(TOOLS_SKILL_READONLY), set(TOOLS_RESERVED)
+    assert not (used & skill), f"引擎与支线层重复：{used & skill}"
+    assert not (used & reserved), f"引擎与预留层重复：{used & reserved}"
+    assert not (skill & reserved), f"支线与预留层重复：{skill & reserved}"
+    assert len(used) + len(skill) + len(reserved) == 35, "三层合计应覆盖官方 35 个工具"
 
 
 def test_snapshot_provenance():
