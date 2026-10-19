@@ -89,6 +89,34 @@ def test_skill_red_lines_present():
     assert "不编造" in SKILL_TEXT
 
 
+def test_skill_covers_delivery_chain():
+    """外送全链路（2026-10-19 补全）：地址 → 可配送门店 → beCode 链路，且诚实标注未实测。"""
+    assert "delivery-query-stores" in SKILL_TEXT and "delivery-query-addresses" in SKILL_TEXT
+    assert "beCode" in SKILL_TEXT
+    # 诚实边界：成功路径未实测必须显式声明
+    assert "成功返回未经真实账户实测" in SKILL_TEXT
+
+
+def test_skill_covers_drive_through():
+    """得来速场景（beType=5）在识别规则与调用链中都有覆盖。"""
+    assert "得来速" in SKILL_TEXT
+    assert "beType` 一律传 **5**" in SKILL_TEXT
+
+
+def test_skill_error_code_table_present():
+    """官方业务码速查表覆盖全部实测码（空态码 vs 失败码必须分清）。"""
+    for code in ("499", "600010", "600058", "610303", "610501"):
+        assert code in SKILL_TEXT, f"SKILL.md 缺少业务码 {code} 的处置说明"
+
+
+def test_skill_card_skeleton_present():
+    """成就卡骨架内联（含转义要求与隐私红线），不依赖仓库代码。"""
+    assert "NON-OFFICIAL FAN PROJECT" in SKILL_TEXT
+    assert "#da291c" in SKILL_TEXT and "#ffc72c" in SKILL_TEXT
+    assert "HTML 转义" in SKILL_TEXT
+    assert "绝不出现" in SKILL_TEXT  # 卡片隐私红线
+
+
 def test_skill_has_five_examples():
     """至少五个对话示例（预算受限/两人/营养/地点模糊/MCP 不可用）。"""
     for i in range(1, 6):
