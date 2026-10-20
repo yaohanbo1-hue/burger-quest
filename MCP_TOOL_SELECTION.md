@@ -1,9 +1,9 @@
 # 麦当劳 MCP 工具全量梳理与选型报告
 
 > 调研时间：2026-10-18 首版，2026-10-19 支线扩容修订（真实 `tools/list` + 逐个实测）
-> 官方工具清单：**35 个唯一工具**（`list_tools` 实测快照见 `tests/fixtures/official_tools_schema.json`，2026-10-17 落盘，35/35 均有 `input_schema`）
+> 官方工具清单：**35 个唯一工具**（`list_tools` 实测快照见 `docs/official_tools_schema.json`，2026-10-17 落盘，35/35 均有 `input_schema`）
 > 本项目覆盖：**11 个引擎只读工具**（`TOOLS_USED`）+ **15 个 Skill 支线只读工具**（`TOOLS_SKILL_READONLY`）+ **9 个预留/不接**（`TOOLS_RESERVED`）= 35 个全覆盖，零遗漏
-> 配套证据：`API_CAPABILITY_AUDIT.md`（接口能力与阻塞项）；支线参数契约详见 `MCP_INTEGRATION.md` §3.12 与 `SKILL.md` §10
+> 配套证据：支线参数契约详见 `MCP_INTEGRATION.md` §3.12 / §3.15 与 `SKILL.md` §10
 
 ---
 
@@ -133,7 +133,7 @@
 ## 3. 接入时的注意事项（实测踩坑）
 
 1. **Schema 以官方为准、边界靠实测**：`list_tools` 快照显示 35/35 工具均有 `input_schema`
-   （21 个明示 `required`，见 `tests/fixtures/official_tools_schema.json`）——参数契约第一依据是
+   （21 个明示 `required`，见 `docs/official_tools_schema.json`）——参数契约第一依据是
    官方 Schema；但官方 Schema 不写「至少填一个」「二选一」这类边界语义（如
    `query-nearby-stores` 的 `city`/`keyword`），也有的字段只在 description 里说明，
    所以新工具接入的正确姿势是：**先读 Schema，再真实调用一次核对返回结构**。
@@ -155,7 +155,7 @@
 8. **类目规则参数**：`mall-points-products` 的 `catRuleIds` 是「类目规则链」（如 `1>4`），
    不同链路返回完全不同的商品面——不传参只能看到活动票，积分换券必须显式传类目。
 9. **不能伪造替换参数**：`calculate-price` 无套餐替换字段，「套餐改价」不可实现，
-   单品组合重算必须明确标注语义不同（见 `API_CAPABILITY_AUDIT.md`）。
+   单品组合重算必须明确标注语义不同（接口能力结论已并入 MCP_INTEGRATION.md §3.6 仍未验证项）。
 10. **限流与配额**：官方限 600 次/分钟/Token；本项目已做 TTL 缓存、去重、有限重试与熔断，
     新增工具应复用既有 `_call` 链路而不是另开调用通道；支线任务由宿主连接器直调时，
     应遵循 SKILL.md §10.5 的「一次问清、批量取数、失败明说」效率约定。

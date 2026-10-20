@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { margin:0; background:#2a1e18; display:flex; justify-content:center; padding:24px; }
+  .card { max-width:420px; width:100%; font-family:"Microsoft YaHei",system-ui,sans-serif;
+          border:3px solid #da291c; border-radius:12px; overflow:hidden; background:#f5efe6; }
+  .head { background:#da291c; color:#ffc72c; padding:12px 16px; position:relative; }
+  .head b { font-size:15px; letter-spacing:.5px; }
+  .fan { position:absolute; top:10px; right:12px; font-size:10px; border:1px solid #ffc72c;
+         padding:1px 6px; border-radius:8px; }
+  .fest { background:#1a1210; color:#7cf67c; font-family:Consolas,monospace; font-size:10px;
+          padding:4px 16px; letter-spacing:2px; display:flex; justify-content:space-between; }
+  .body { padding:14px 16px; color:#222; }
+  .mode { font-size:12px; color:#666; }
+  h3 { margin:8px 0 2px; font-size:17px; }
+  .story { font-size:13px; line-height:1.5; }
+  .equip { margin:10px 0 4px; font-size:13px; }
+  .equip li { margin:3px 0; }
+  table { width:100%; font-size:13px; border-collapse:collapse; margin-top:8px; }
+  td { padding:3px 0; }
+  td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  .bar { height:8px; background:#e5dcc8; border-radius:4px; margin-top:8px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:95%; background:linear-gradient(90deg,#ffc72c,#da291c); }
+  .attr { font-size:12px; color:#555; margin-top:8px; }
+  .badge { display:inline-block; background:#1a1210; color:#ffc72c; font-size:11px;
+           padding:2px 8px; border-radius:10px; margin-right:6px; }
+  .foot { font-size:11px; color:#888; margin-top:10px; border-top:1px dashed #ccc; padding-top:8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head">
+    <b>Burger Quest · 麦门异世界</b>
+    <span class="fan">NON-OFFICIAL FAN PROJECT</span>
+  </div>
+  <div class="fest"><span>▮ 1024 FESTIVAL MODE</span><span>10.20 — 10.26</span></div>
+  <div class="body">
+    <div class="mode"><span class="badge">LIVE · 麦当劳 MCP 实时数据</span>生成于 2026-10-21</div>
+    <h3>午间 Bug 猎杀补给 · 修完这个 Bug 就吃的游侠（到店取餐密令）</h3>
+    <div class="story">编译器的红字还未散去，你的饥饿 debuff 已叠满三层。智囊团从官方菜单中寻得这套补给——足以支撑你打完今天最后一场硬仗。</div>
+    <ul class="equip">
+      <li>⚔️ 烈焰骑士的招牌巨剑 —— 麦辣鸡腿堡 ×1（¥21.00 · 编码 D1002 · 官方菜单）</li>
+      <li>⚔️ 能量副武器 —— 麦辣鸡翅（2块）×1（¥12.00 · 编码 D1008 · 官方菜单）</li>
+      <li>⚔️ 补给药水 —— 热红茶 ×1（¥8.00 · 编码 D1015 · 官方菜单）</li>
+      <li>🏅 BUG 猎杀勋章 · 编译通过纪念（1024 限定装饰，无等级）</li>
+    </ul>
+    <table>
+      <tr><td>原价合计</td><td>¥41.00</td></tr>
+      <tr><td>已核实优惠</td><td>-¥8.00</td></tr>
+      <tr><td><b>应付总价（calculate-price 权威结果）</b></td><td><b>¥33.00</b></td></tr>
+      <tr><td>剩余预算</td><td>¥7.00</td></tr>
+    </table>
+    <div class="bar"><i></i></div>
+    <div class="attr">🧪 属性面板：本餐约 840 千卡 ≈ <b>0.8G</b>（1G = 1024 kcal）· 蛋白质约 41g · 今日余量 0.2G<br>
+    ⚡ 下单理由：改完最后一个 Bug 就吃——这顿是编译通过的奖赏。</div>
+    <div class="foot">非麦当劳官方项目，参赛作品，仅供娱乐参考；餐品信息、价格及供应状态以麦当劳官方渠道实时结果为准。<br>
+    数据来源：query-meals / calculate-price / query-store-coupons / query-my-coupons / list-nutrition-foods（门店 DEMO-001 · 演示数据）</div>
+  </div>
+</div>
+</body>
+</html>

@@ -2,6 +2,8 @@
 
 > 本文档说明 Burger Quest（麦门异世界）实际使用的麦当劳中国官方 MCP Server、工具、调用链与业务价值。
 > **所有工具参数与返回结构均于 2026-10-13 用官方 Token 联调实测**（`list_tools` 官方 Schema + 真实调用验证），实测记录见 §3.5。
+>
+> **文档性质说明（2026-10-21）**：本文是开发期（2026-10-13 ~ 10-20）的集成实测与验证记录。文中提及的参考引擎及其自动化测试套件曾随开发过程存在并全部跑绿；2026-10-21 本仓库转型为**纯 Skill 交付**（只保留 SKILL.md 与证据文档），引擎与测试不再随仓库分发——记录完整保留，作为「26 个只读工具全部经过真实 Token 端到端验证」的证据。
 
 ## 1. MCP Server
 
@@ -368,7 +370,7 @@ code=600010  使用优惠券需要couponId和couponCode
 
 ### Skill 与代码的一致性守卫
 
-`SKILL.md`（WorkBuddy 技能入口）与仓库代码保持同步，由 `tests/test_skill_docs.py` 自动校验：
+`SKILL.md`（WorkBuddy 技能入口）与实测结论保持同步——开发期由文档一致性测试（校验文档提到的工具名均真实存在、必备章节齐全、解析规则与引擎一致、数值示例与引擎输出一致）自动强制，防止文档与代码漂移：
 
 - 文档中提到的每个 MCP 工具名都必须在 `TOOLS_USED` / `TOOLS_SKILL_READONLY` / `TOOLS_RESERVED` 真实清单内（防虚构工具名）；
 - 引擎使用的 11 个工具 + 外送入口 1 个 + 支线任务 15 个工具都必须在文档中说明；
@@ -389,7 +391,7 @@ code=600010  使用优惠券需要couponId和couponCode
 
 审计方法：**以官方定义为准，不靠工具名猜参数**。两个权威来源：
 1. 官方仓库 README（`M-China/mcd-mcp-server`）：端点 `https://mcp.mcd.cn`、Streamable HTTP、`Authorization: Bearer`、限流 600 次/分钟、错误码 401/429——与本文档 §1 一致；
-2. **实时 `list_tools` Schema 快照**：2026-10-17 用真实 Token 经项目自有客户端拉取官方 35 个工具的完整 `inputSchema`，**verbatim 落盘** `tests/fixtures/official_tools_schema.json`（未做任何修改），测试套件据此做回归。
+2. **实时 `list_tools` Schema 快照**：2026-10-17 用真实 Token 经项目自有客户端拉取官方 35 个工具的完整 `inputSchema`，**verbatim 落盘** `docs/official_tools_schema.json`（未做任何修改），开发期的测试套件据此做回归。
 
 **首个实证差异**：README 工具表列 33 个工具，实时服务实为 35 个（多 `query-promotions` / `query-survey-coupon`，README 最后提交 2026-10-01 早于服务上线）——以实时 Schema 为准。项目 `TOOLS_USED`(11) + `TOOLS_SKILL_READONLY`(15) + `TOOLS_RESERVED`(9) 全部在官方 35 个内，无虚构工具名（2026-10-19 三层口径）。
 
@@ -419,7 +421,7 @@ code=600010  使用优惠券需要couponId和couponCode
 5. **防御性解析加固**：`delivery-query-addresses` 返回容器官方未定义（无参数 Schema、真实账户无地址只验证过空态）→ 用 `_as_list` 兼容 list/`list`/`items`/`data`/`records`/`result`/`addresses` 容器并丢弃无 addressId 条目；餐品详情成功但无名称 → 服务层如实计数警告（原来静默跳过）；null/空列表/类型变化（categories 为 dict、营养文本缺表头、算价 data=null 等）全部有测试锁定「明确为空或丢弃坏条目，绝不猜测填空」；
 6. **仍待验证（无法从官方定义确认）**：① 优惠券 `percent` 字段语义（88 → 0.88 还是 8.8 折，无官方文档且无券账户，当前按 `p/100 if p>1 else p` 启发式并已在代码注释标注）；② 同单多券的服务端接受性（见上）；③ `query-my-coupons` 分页参数为 string 的取值边界（默认分页未触顶，未实测）。
 
-### 契约回归测试（tests/test_tool_contract.py，37 例）
+### 契约回归（开发期 37 例自动化断言）
 
 - 快照守卫：35 工具、出处元数据（server/SDK/时间）、`TOOLS_USED`/`TOOLS_RESERVED` ⊆ 官方清单；
 - 端到端传参契约：完整 quest（到店+外送两条链路）捕获每个工具的实际入参，对照官方 Schema 断言「必填齐备 / 无官方外参数（防拼错）/ 枚举合法 / 类型正确」，调用流非空断言防真空校验；

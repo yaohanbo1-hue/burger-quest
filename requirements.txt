@@ -1,8 +1,0 @@
-# 开发/测试环境一键安装（单一事实来源是 pyproject.toml，避免重复声明）：
-#   pip install -e ".[dev]"
-#
-# 说明：
-# - 运行时依赖（mcp>=1.2.0，仅真实 MCP 模式需要）与测试依赖（pytest>=8.0）
-#   统一在 pyproject.toml 声明，本文件不再重复罗列，防止两边漂移；
-# - 只装运行时：pip install .
-# - CI 使用：pip install -e ".[dev]"
