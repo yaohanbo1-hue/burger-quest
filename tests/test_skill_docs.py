@@ -110,11 +110,15 @@ def test_skill_error_code_table_present():
 
 
 def test_skill_card_skeleton_present():
-    """成就卡骨架内联（含转义要求与隐私红线），不依赖仓库代码。"""
+    """成就卡骨架内联且自适应（HTML/Markdown 双形态 + 可选输出规则），不依赖仓库代码。"""
     assert "NON-OFFICIAL FAN PROJECT" in SKILL_TEXT
     assert "#da291c" in SKILL_TEXT and "#ffc72c" in SKILL_TEXT
     assert "HTML 转义" in SKILL_TEXT
     assert "绝不出现" in SKILL_TEXT  # 卡片隐私红线
+    # 自适应（2026-10-20）：宿主能力选形态 + 可选输出
+    assert "按宿主能力选形态" in SKILL_TEXT
+    assert "Markdown 形态" in SKILL_TEXT and "HTML 形态" in SKILL_TEXT
+    assert "不出卡" in SKILL_TEXT  # 规划失败/用户拒绝时不造卡
 
 
 def test_skill_has_five_examples():
