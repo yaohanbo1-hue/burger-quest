@@ -21,6 +21,10 @@
 
 *↑ 上面这张卡是 2026-10-15 用官方 Token 的真实查询生成的（LIVE 徽章）——所有餐品、价格、优惠均来自麦当劳 MCP 实时返回，不编造。*
 
+📹 **30 秒快速了解**（MG 动画自动播放；完整 1080p 版见 [burger_quest_mg.mp4](docs/media/burger_quest_mg.mp4)）：
+
+![Burger Quest 30 秒 MG 动画预览](docs/media/burger_quest_preview.gif)
+
 ⭐ **喜欢这个项目？点个 Star 就是给麦门冒险者的最大补给**（本赛事纯 Star 排名，每一颗都算数）。
 
 ---
