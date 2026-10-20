@@ -1,6 +1,9 @@
 # 🍔 Burger Quest · 麦门异世界
 
 [![CI](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml/badge.svg)](https://github.com/yaohanbo1-hue/burger-quest/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/yaohanbo1-hue/burger-quest?style=flat&label=⭐%20Star&color=da291c)](https://github.com/yaohanbo1-hue/burger-quest/stargazers)
+[![Contest](https://img.shields.io/badge/🏆-麦当劳程序员创意开发大赛-daa520)](https://github.com/M-China/mcd-developer-innovation-challenge)
+[![MCP](https://img.shields.io/badge/MCP-麦当劳中国官方-ffc72c)](https://github.com/M-China/mcd-mcp-server)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/yaohanbo1-hue/burger-quest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-722%20passed-brightgreen)](#6-测试)
@@ -11,6 +14,14 @@
 > 输入预算、心情、口味和用餐偏好，RPG 游戏主持人替你从**麦当劳中国官方 MCP Server 的真实菜单**里，组出一份不超预算的点餐方案，并生成一张可以分享的任务成就卡。
 
 **非麦当劳官方项目** —— 本项目为「麦当劳程序员创意开发大赛」参赛作品，由参赛者独立开发。餐品信息、价格及供应状态以麦当劳官方渠道的实时结果为准。
+
+🎉 **1024 程序员节模式已激活（10-20 ~ 10-26）**：热量播报切换为程序员单位 **1G = 1024 kcal**，可领券 / 抽奖机会 / 临期积分一键巡检——SKILL.md §11 实时生效。
+
+![真实 MCP 实测成就卡（LIVE 数据）](examples/cards/live_real.png)
+
+*↑ 上面这张卡是 2026-10-15 用官方 Token 的真实查询生成的（LIVE 徽章）——所有餐品、价格、优惠均来自麦当劳 MCP 实时返回，不编造。*
+
+⭐ **喜欢这个项目？点个 Star 就是给麦门冒险者的最大补给**（本赛事纯 Star 排名，每一颗都算数）。
 
 ---
 
