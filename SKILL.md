@@ -460,7 +460,7 @@ AI：  🎉 1024 程序员节模式已上线（10.20 - 10.26）！
 - **零部署**：本技能只依赖 WorkBuddy 的 `mcd-mcp` 连接器——无需安装 Python 引擎、无需克隆仓库、无需配置本地环境，装上即用；
 - **工具覆盖**：主线 11 个只读工具（`now-time-info` / `query-nearby-stores` / `query-meals` / `query-meal-detail` / `query-store-coupons` / `query-my-coupons` / `list-nutrition-foods` / `calculate-price` / `campaign-calendar` / `available-coupons` / `query-my-account`）+ 外送入口 `delivery-query-addresses`；支线 15 个只读工具（积分商城/抽奖、派对侦查、团餐促销、历史订单）；写操作与无法验证的工具一律不调用——合计覆盖官方 35 个工具中的 26 个只读/查询工具；
 - **参数契约**：全部来自官方 `list_tools` Schema 快照 + 真实 Token 端到端实测（2026-10-13/14/19；派对五链、积分类目链 `1>4`、团餐促销、历史订单空态与错误码 610303/610501 均有实测记录）；
-- **规则同源**：解析与规划规则与伴随开源引擎 burger-quest（github.com/yaohanbo1-hue/burger-quest）的 nlparser/planner 行为一致——该项目以 722 个自动化测试锁死同一套规则，本文件与其保持同步；
+- **规则同源**：本文件的解析与规划规则，开发期与参考引擎（同仓库 Python 实现，含 722 个自动化测试）逐条对齐验证；2026-10-21 仓库转型纯 Skill 交付后引擎不再随仓库分发，规则已全部固化在本文件中，测试记录见 `workbuddy.md`；
 - **数值纪律**：价格只认 `calculate-price` 权威返回（单位：分），派对场期价格同为分；积分/券数值为字符串数字需容错转换；`accountId`、地址、手机号等隐私字段绝不读取输出。
 
 ### 工具参数速查表（官方 Schema 必填项 + 实测易错点；调用前可用 `list_tools` 核对）
