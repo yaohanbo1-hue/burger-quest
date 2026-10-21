@@ -16,7 +16,7 @@
 
 *↑ 2026-10-15 用官方 Token 的真实查询生成（LIVE 徽章）——所有餐品、价格、优惠均来自麦当劳 MCP 实时返回，不编造。*
 
-📹 **60 秒快速了解**（MG 动画自动播放；完整版见 [burger_quest_mg.mp4](docs/media/burger_quest_mg.mp4)，含配乐与音效）：
+📹 **2 分半快速了解**（MG 动画自动播放；完整版见 [burger_quest_mg.mp4](docs/media/burger_quest_mg.mp4)，Remotion 代码驱动 · 含配乐与音效）：
 
 ![Burger Quest 30 秒 MG 动画预览](docs/media/burger_quest_preview.gif)
 
